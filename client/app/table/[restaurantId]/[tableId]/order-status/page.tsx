@@ -102,6 +102,7 @@ export default function OrderStatusPage() {
     const [error, setError] = useState('');
     const [reviewOrder, setReviewOrder] = useState<Order | null>(null);
     const [paymentOrderId, setPaymentOrderId] = useState<string | null>(null);
+    const [localCheckouts, setLocalCheckouts] = useState<Record<string, Order['checkout']>>({});
     const [foodRating, setFoodRating] = useState(0);
     const [experienceRating, setExperienceRating] = useState(0);
     const [preparationRating, setPreparationRating] = useState(0);
@@ -258,7 +259,22 @@ export default function OrderStatusPage() {
         });
         setSubmitting(false);
         if (!result.success || !result.order) {
-            setCheckoutError(result.error || 'Could not prepare payment. Please try again.');
+            // Backend checkout unavailable — fall back to locally-computed totals so
+            // the UPI QR (with bill amount embedded) can still be shown to the customer.
+            const fallbackCheckout: Order['checkout'] = {
+                couponCode: reviewingTakeaway ? '' : couponCode.trim().toUpperCase(),
+                discountAmount: reviewingTakeaway ? 0 : draftDiscount,
+                tipAmount: reviewingTakeaway ? 0 : (Number.isFinite(tipAmount) ? tipAmount : 0),
+                packagingCharge: draftPackagingCharge,
+                gstRate: Number(restaurant?.gstPercentage || 0),
+                sgstRate: Number(restaurant?.sgstPercentage || 0),
+                gstAmount: roundMoney(draftTaxable * Number(restaurant?.gstPercentage || 0) / 100),
+                sgstAmount: roundMoney(draftTaxable * Number(restaurant?.sgstPercentage || 0) / 100),
+                payableAmount: draftPayable,
+            };
+            setLocalCheckouts((prev) => ({ ...prev, [reviewOrder._id]: fallbackCheckout }));
+            setPaymentOrderId(reviewOrder._id);
+            setReviewOrder(null);
             return;
         }
         setOrders((current) => current.map((order) => order._id === result.order._id ? result.order : order));
@@ -269,7 +285,14 @@ export default function OrderStatusPage() {
     const orderedNames = new Set(orders.filter((order) => order.status !== 'cancelled')
         .flatMap((order) => order.items.map((item) => item.name.toLowerCase().trim())));
     const memoryImages = menuItems.filter((item) => item.aestheticImageUrl && orderedNames.has(item.name.toLowerCase().trim()));
-    const paymentOrder = orders.find((order) => order._id === paymentOrderId && order.status === 'completed' && order.paymentStatus !== 'paid' && typeof order.checkout?.payableAmount === 'number');
+    // Merge any locally-computed fallback checkouts so the QR renders even when
+    // the backend /checkout endpoint is temporarily unreachable.
+    const effectiveOrders = orders.map((order) =>
+        localCheckouts[order._id] && !order.checkout
+            ? { ...order, checkout: localCheckouts[order._id] }
+            : order
+    );
+    const paymentOrder = effectiveOrders.find((order) => order._id === paymentOrderId && order.status === 'completed' && order.paymentStatus !== 'paid' && typeof order.checkout?.payableAmount === 'number');
     const visitFullyPaid = orders.some((order) => order.status === 'completed' && order.paymentStatus === 'paid') &&
         orders.every((order) => order.status === 'cancelled' || (order.status === 'completed' && order.paymentStatus === 'paid'));
 
@@ -340,7 +363,7 @@ export default function OrderStatusPage() {
                     <span className="text-xs text-zinc-500">{orders.length} {orders.length === 1 ? 'order' : 'orders'}</span>
                 </div>
 
-                {orders.map((order) => {
+                {effectiveOrders.map((order) => {
                     const currentStep = steps.findIndex((step) => step.key === order.status);
                     const checkout = order.checkout;
                     const hasCheckout = typeof checkout?.payableAmount === 'number';
