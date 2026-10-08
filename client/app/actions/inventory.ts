@@ -6,6 +6,7 @@ import { auth } from '@/lib/auth';
 import dbConnect from '@/lib/db';
 import InventoryItem, { INVENTORY_UNITS, type InventoryUnit } from '@/models/InventoryItem';
 import StockMovement, { type IStockMovement } from '@/models/StockMovement';
+import { apiFetch } from '@/client-lib/api';
 
 export type InventoryInput = {
     name: string;
@@ -21,6 +22,28 @@ export type InventoryInput = {
 
 const finiteNonNegative = (value: unknown) => Number.isFinite(Number(value)) && Number(value) >= 0;
 const rounded = (value: unknown) => Math.round(Number(value) * 10000) / 10000;
+
+export async function applyInventoryBillPurchase(data: {
+    billReference: string;
+    lines: { inventoryItemId: string; quantity: number; unitCost: number }[];
+}) {
+    try {
+        if (!Array.isArray(data.lines) || !data.lines.length || data.lines.length > 40) {
+            return { success: false, error: 'Submit between 1 and 40 reviewed bill lines' };
+        }
+        const response = await apiFetch('/api/v1/inventory/bill-purchase', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) return { success: false, error: result.error || 'Could not apply bill' };
+        revalidatePath('/dashboard/inventory');
+        return { success: true, updated: result.updated as number };
+    } catch (error: any) {
+        console.error('Apply inventory bill error:', error);
+        return { success: false, error: error?.message || 'Could not apply bill' };
+    }
+}
 
 async function restaurantContext() {
     const session = await auth();

@@ -9,6 +9,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { adjustInventoryStock, archiveInventoryItem, createInventoryItem, updateInventoryItem, type InventoryInput } from '@/app/actions/inventory';
 import { formatCurrency, formatDate } from '@/lib/utils';
+import { InventoryBillScanner } from '@/components/dashboard/InventoryBillScanner';
 
 type InventoryItem = InventoryInput & {
     _id: string;
@@ -114,6 +115,8 @@ export function InventoryManager({ initialItems, initialMovements }: { initialIt
                 <div><h1 className="text-2xl font-bold tracking-tight text-slate-900">Inventory Management</h1><p className="mt-1 text-sm text-slate-500">Track ingredients, supplies, costs, purchasing, usage, and wastage.</p></div>
                 <button onClick={openNew} className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-sky-600"><PlusIcon className="h-5 w-5" /> Add inventory item</button>
             </div>
+
+            <InventoryBillScanner items={initialItems.map(({ _id, name, unit, currentStock, costPerUnit }) => ({ _id, name, unit, currentStock, costPerUnit }))} />
 
             <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
                 {summaryCards.map((card) => <div key={card.label} className="rounded-2xl border border-slate-200/70 bg-white p-5"><div className={`inline-flex rounded-xl p-2 ${card.tone}`}><card.icon className="h-5 w-5" /></div><p className="mt-3 text-2xl font-bold text-slate-900">{card.value}</p><p className="text-xs text-slate-500">{card.label}</p></div>)}
