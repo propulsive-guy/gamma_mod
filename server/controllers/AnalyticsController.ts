@@ -10,6 +10,7 @@ const ASSOCIATIONS_CACHE_TTL = 10 * 60; // 10 minutes
 // Combination mining is cubic in the number of distinct items in a basket.
 // Keep pathological/imported orders from exhausting the API process.
 const MAX_ASSOCIATION_ITEMS_PER_ORDER = 20;
+const metricsInFlight = new Map<string, Promise<any>>();
 
 /**
  * Build a deterministic Redis cache key scoped to restaurant + date range.
@@ -23,16 +24,13 @@ function buildCacheKey(prefix: string, restaurantId: string, start: Date, end: D
 
 const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 const ratio = (part: number, whole: number) => whole ? Math.round(part / whole * 1000) / 10 : 0;
-const average = (values: number[]) => values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length * 100) / 100 : 0;
+const average = (sum: number, count: number) => count ? Math.round(sum / count * 100) / 100 : 0;
 const beverageCategory = /drink|beverage|juice|shake|coffee|tea|mocktail|cocktail|soda|lassi|smoothie/i;
 const waterName = /(^|\s)(water|mineral water|bottled water|aqua)(\s|$)/i;
 
 async function calculateAdvancedMetrics(restaurantId: string, start: Date, end: Date) {
     const objectId = new mongoose.Types.ObjectId(restaurantId);
-    const [periodOrders, allTimeStats, menuItems] = await Promise.all([
-        Order.find({ restaurantId: objectId, createdAt: { $gte: start, $lte: end } })
-            .select('createdAt status total items customerPhone customerName paymentStatus review orderType')
-            .lean(),
+    const [allTimeStats, menuItems] = await Promise.all([
         Order.aggregate([
             { $match: { restaurantId: objectId, status: { $ne: 'cancelled' } } },
             { $group: { _id: null, revenue: { $sum: '$total' }, count: { $sum: 1 } } },
@@ -40,39 +38,107 @@ async function calculateAdvancedMetrics(restaurantId: string, start: Date, end: 
         MenuItem.find({ restaurantId: objectId }).select('name category price dietaryType itemType isAvailable').lean(),
     ]);
 
-    const validOrders = periodOrders.filter((order: any) => order.status !== 'cancelled');
+    const periodOrderCursor = Order.find({ restaurantId: objectId, createdAt: { $gte: start, $lte: end } })
+        .select('createdAt status total items customerPhone customerName paymentStatus review orderType')
+        .lean()
+        .cursor();
     const menuById = new Map(menuItems.map((item: any) => [String(item._id), item]));
     const itemStats = new Map<string, any>();
-    const categoryStats = new Map<string, { quantity: number; revenue: number; orders: Set<string> }>();
-    const dietaryStats = new Map<string, { quantity: number; revenue: number; orders: Set<string> }>();
-    const typeStats = new Map<string, { quantity: number; revenue: number; orders: Set<string> }>();
+    const categoryStats = new Map<string, { quantity: number; revenue: number; orders: number }>();
+    const dietaryStats = new Map<string, { quantity: number; revenue: number; orders: number }>();
+    const typeStats = new Map<string, { quantity: number; revenue: number; orders: number }>();
     const hourly = Array.from({ length: 24 }, (_, hour) => ({ hour, orders: 0, revenue: 0, units: 0 }));
     const weekdayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const weekdays = weekdayNames.map((day) => ({ day, orders: 0, revenue: 0, units: 0 }));
     const dailyMap = new Map<string, { date: string; orders: number; revenue: number }>();
+    const statusCounts: Record<string, number> = { pending: 0, preparing: 0, served: 0, completed: 0, cancelled: 0 };
+    const orderTypes: Record<string, { orders: number; revenue: number }> = {
+        'dine-in': { orders: 0, revenue: 0 }, takeaway: { orders: 0, revenue: 0 },
+    };
+    let periodOrderCount = 0;
+    let validOrderCount = 0;
+    let revenue = 0;
+    let completedCount = 0;
+    let paidCount = 0;
+    let unpaidCompletedCount = 0;
+    let reviewCount = 0;
+    let foodRatingSum = 0, foodRatingCount = 0;
+    let experienceRatingSum = 0, experienceRatingCount = 0;
+    let preparationRatingSum = 0, preparationRatingCount = 0;
+    let packagingRatingSum = 0, packagingRatingCount = 0;
+    const lowFoodOrders: Array<{ orderId: string; rating: number; comment: string; customerName: string; createdAt: Date; items: string[] }> = [];
+    const customerMap = new Map<string, { name: string; phone: string; orders: number; spend: number }>();
 
     for (const menuItem of menuItems as any[]) {
         itemStats.set(String(menuItem._id), {
             menuItemId: String(menuItem._id), name: menuItem.name, category: menuItem.category || 'Other',
             dietaryType: menuItem.dietaryType || 'unknown', itemType: menuItem.itemType || 'food',
-            quantity: 0, revenue: 0, orders: new Set<string>(), isAvailable: menuItem.isAvailable !== false,
+            quantity: 0, revenue: 0, orders: 0, isAvailable: menuItem.isAvailable !== false,
         });
     }
 
-    for (const order of validOrders as any[]) {
+    for await (const order of periodOrderCursor as any) {
+        periodOrderCount++;
+        if (statusCounts[order.status] !== undefined) statusCounts[order.status]++;
+        if (order.status === 'completed') completedCount++;
+        if (order.paymentStatus === 'paid') paidCount++;
+
+        if (order.review) {
+            reviewCount++;
+            for (const [field, target] of [
+                ['foodRating', 'food'], ['experienceRating', 'experience'],
+                ['preparationRating', 'preparation'], ['packagingRating', 'packaging'],
+            ]) {
+                const rating = Number(order.review[field] || 0);
+                if (rating <= 0) continue;
+                if (target === 'food') { foodRatingSum += rating; foodRatingCount++; }
+                else if (target === 'experience') { experienceRatingSum += rating; experienceRatingCount++; }
+                else if (target === 'preparation') { preparationRatingSum += rating; preparationRatingCount++; }
+                else { packagingRatingSum += rating; packagingRatingCount++; }
+            }
+            const rating = Number(order.review.foodRating || 0);
+            if (rating > 0 && rating <= 2 && lowFoodOrders.length < 20) {
+                lowFoodOrders.push({
+                    orderId: String(order._id), rating, comment: order.review.comment || '',
+                    customerName: order.customerName || 'Guest', createdAt: order.createdAt,
+                    items: (order.items || []).map((item: any) => item.name),
+                });
+            }
+        }
+
+        if (order.status === 'cancelled') continue;
+        validOrderCount++;
+        const orderRevenue = Number(order.total || 0);
+        revenue += orderRevenue;
+        if (order.status === 'completed' && order.paymentStatus !== 'paid') unpaidCompletedCount++;
+        const orderType = (order.orderType || 'dine-in') === 'takeaway' ? 'takeaway' : 'dine-in';
+        orderTypes[orderType].orders++;
+        orderTypes[orderType].revenue += orderRevenue;
+        const phone = String(order.customerPhone || '').replace(/\D/g, '');
+        if (phone) {
+            const customer = customerMap.get(phone) || { name: order.customerName || 'Guest', phone, orders: 0, spend: 0 };
+            customer.orders++;
+            customer.spend += orderRevenue;
+            customerMap.set(phone, customer);
+        }
+
         const createdAt = new Date(order.createdAt);
         const hour = createdAt.getHours();
         const weekday = createdAt.getDay();
         const date = createdAt.toISOString().slice(0, 10);
         hourly[hour].orders++;
-        hourly[hour].revenue += Number(order.total || 0);
+        hourly[hour].revenue += orderRevenue;
         weekdays[weekday].orders++;
-        weekdays[weekday].revenue += Number(order.total || 0);
+        weekdays[weekday].revenue += orderRevenue;
         const daily = dailyMap.get(date) || { date, orders: 0, revenue: 0 };
         daily.orders++;
-        daily.revenue += Number(order.total || 0);
+        daily.revenue += orderRevenue;
         dailyMap.set(date, daily);
 
+        const orderItemKeys = new Set<string>();
+        const orderCategories = new Set<string>();
+        const orderDietaryTypes = new Set<string>();
+        const orderItemTypes = new Set<string>();
         for (const line of order.items || []) {
             const id = String(line.menuItemId || '');
             const menu = menuById.get(id) as any;
@@ -88,7 +154,7 @@ async function calculateAdvancedMetrics(restaurantId: string, start: Date, end: 
 
             const stat = itemStats.get(id) || {
                 menuItemId: id, name, category, dietaryType, itemType,
-                quantity: 0, revenue: 0, orders: new Set<string>(), isAvailable: true,
+                quantity: 0, revenue: 0, orders: 0, isAvailable: true,
             };
             stat.name = name;
             stat.category = category;
@@ -96,21 +162,33 @@ async function calculateAdvancedMetrics(restaurantId: string, start: Date, end: 
             stat.itemType = itemType;
             stat.quantity += quantity;
             stat.revenue += revenue;
-            stat.orders.add(String(order._id));
+            orderItemKeys.add(id || name.toLowerCase());
             itemStats.set(id || name.toLowerCase(), stat);
 
-            for (const [map, key] of [[categoryStats, category], [dietaryStats, dietaryType], [typeStats, itemType]] as const) {
-                const aggregate = map.get(key) || { quantity: 0, revenue: 0, orders: new Set<string>() };
-                aggregate.quantity += quantity;
-                aggregate.revenue += revenue;
-                aggregate.orders.add(String(order._id));
-                map.set(key, aggregate);
-            }
+            const categoryTotal = categoryStats.get(category) || { quantity: 0, revenue: 0, orders: 0 };
+            categoryTotal.quantity += quantity;
+            categoryTotal.revenue += revenue;
+            categoryStats.set(category, categoryTotal);
+            const dietaryTotal = dietaryStats.get(dietaryType) || { quantity: 0, revenue: 0, orders: 0 };
+            dietaryTotal.quantity += quantity;
+            dietaryTotal.revenue += revenue;
+            dietaryStats.set(dietaryType, dietaryTotal);
+            const typeTotal = typeStats.get(itemType) || { quantity: 0, revenue: 0, orders: 0 };
+            typeTotal.quantity += quantity;
+            typeTotal.revenue += revenue;
+            typeStats.set(itemType, typeTotal);
+            orderCategories.add(category);
+            orderDietaryTypes.add(dietaryType);
+            orderItemTypes.add(itemType);
         }
+        for (const key of orderItemKeys) itemStats.get(key).orders++;
+        for (const key of orderCategories) categoryStats.get(key)!.orders++;
+        for (const key of orderDietaryTypes) dietaryStats.get(key)!.orders++;
+        for (const key of orderItemTypes) typeStats.get(key)!.orders++;
     }
 
     const normalizedItems = [...itemStats.values()].map((item) => ({
-        ...item, orders: item.orders.size, revenue: money(item.revenue),
+        ...item, revenue: money(item.revenue),
     }));
     const soldItems = normalizedItems.filter((item) => item.quantity > 0);
     const rank = (items: any[], direction = -1) => [...items].sort((a, b) => direction * (a.quantity - b.quantity) || direction * (a.revenue - b.revenue));
@@ -120,42 +198,13 @@ async function calculateAdvancedMetrics(restaurantId: string, start: Date, end: 
     const topNonVeg = rank(soldItems.filter((item) => ['non-veg', 'egg'].includes(item.dietaryType))).slice(0, 10);
     const topDrinks = rank(soldItems.filter((item) => item.itemType === 'beverage' && !waterName.test(item.name))).slice(0, 10);
 
-    const revenue = validOrders.reduce((sum: number, order: any) => sum + Number(order.total || 0), 0);
     const units = soldItems.reduce((sum, item) => sum + item.quantity, 0);
-    const completed = periodOrders.filter((order: any) => order.status === 'completed');
-    const paid = periodOrders.filter((order: any) => order.paymentStatus === 'paid');
-    const reviewed = periodOrders.filter((order: any) => order.review);
-    const foodRatings = reviewed.map((order: any) => Number(order.review?.foodRating)).filter((value: number) => value > 0);
-    const experienceRatings = reviewed.map((order: any) => Number(order.review?.experienceRating)).filter((value: number) => value > 0);
-    const preparationRatings = reviewed.map((order: any) => Number(order.review?.preparationRating)).filter((value: number) => value > 0);
-    const packagingRatings = reviewed.map((order: any) => Number(order.review?.packagingRating)).filter((value: number) => value > 0);
-    const lowFoodOrders = reviewed.filter((order: any) => Number(order.review?.foodRating) <= 2 && Number(order.review?.foodRating) > 0)
-        .map((order: any) => ({
-            orderId: String(order._id), rating: order.review.foodRating, comment: order.review.comment || '',
-            customerName: order.customerName || 'Guest', createdAt: order.createdAt,
-            items: (order.items || []).map((item: any) => item.name),
-        })).slice(0, 20);
-
-    const customerMap = new Map<string, { name: string; phone: string; orders: number; spend: number }>();
-    for (const order of validOrders as any[]) {
-        const phone = String(order.customerPhone || '').replace(/\D/g, '');
-        if (!phone) continue;
-        const customer = customerMap.get(phone) || { name: order.customerName || 'Guest', phone, orders: 0, spend: 0 };
-        customer.orders++;
-        customer.spend += Number(order.total || 0);
-        customerMap.set(phone, customer);
-    }
     const customers = [...customerMap.values()];
     const repeatCustomers = customers.filter((customer) => customer.orders > 1);
-    const statusCounts = Object.fromEntries(['pending', 'preparing', 'served', 'completed', 'cancelled']
-        .map((status) => [status, periodOrders.filter((order: any) => order.status === status).length]));
-    const orderTypes = Object.fromEntries(['dine-in', 'takeaway'].map((type) => {
-        const orders = validOrders.filter((order: any) => (order.orderType || 'dine-in') === type);
-        return [type, { orders: orders.length, revenue: money(orders.reduce((sum: number, order: any) => sum + Number(order.total || 0), 0)) }];
-    }));
+    for (const type of Object.keys(orderTypes)) orderTypes[type].revenue = money(orderTypes[type].revenue);
 
-    const dimensions = (map: Map<string, { quantity: number; revenue: number; orders: Set<string> }>) =>
-        [...map.entries()].map(([name, value]) => ({ name, quantity: value.quantity, revenue: money(value.revenue), orders: value.orders.size }))
+    const dimensions = (map: Map<string, { quantity: number; revenue: number; orders: number }>) =>
+        [...map.entries()].map(([name, value]) => ({ name, quantity: value.quantity, revenue: money(value.revenue), orders: value.orders }))
             .sort((a, b) => b.quantity - a.quantity);
     const categoryPerformance = dimensions(categoryStats);
     const dietaryPerformance = dimensions(dietaryStats);
@@ -165,32 +214,32 @@ async function calculateAdvancedMetrics(restaurantId: string, start: Date, end: 
         indicators.push({ group, key, label, value: Number.isFinite(value) ? money(value) : 0, unit });
 
     add('Revenue', 'period_revenue', 'Period revenue', revenue, 'currency');
-    add('Revenue', 'average_order_value', 'Average order value', validOrders.length ? revenue / validOrders.length : 0, 'currency');
-    add('Orders', 'period_orders', 'Orders received', periodOrders.length);
-    add('Orders', 'valid_orders', 'Non-cancelled orders', validOrders.length);
+    add('Revenue', 'average_order_value', 'Average order value', validOrderCount ? revenue / validOrderCount : 0, 'currency');
+    add('Orders', 'period_orders', 'Orders received', periodOrderCount);
+    add('Orders', 'valid_orders', 'Non-cancelled orders', validOrderCount);
     add('Orders', 'units_sold', 'Units sold', units);
-    add('Orders', 'average_basket_units', 'Average basket units', validOrders.length ? units / validOrders.length : 0);
+    add('Orders', 'average_basket_units', 'Average basket units', validOrderCount ? units / validOrderCount : 0);
     add('Customers', 'unique_customers', 'Unique identified customers', customers.length);
     add('Customers', 'repeat_customers', 'Repeat customers', repeatCustomers.length);
     add('Customers', 'repeat_rate', 'Repeat customer rate', ratio(repeatCustomers.length, customers.length), 'percent');
-    add('Payments', 'paid_orders', 'Paid orders', paid.length);
-    add('Payments', 'payment_rate', 'Payment completion rate', ratio(paid.length, completed.length), 'percent');
-    add('Reviews', 'review_count', 'Reviews received', reviewed.length);
-    add('Reviews', 'review_rate', 'Review response rate', ratio(reviewed.length, completed.length), 'percent');
-    add('Reviews', 'food_rating', 'Average food rating', average(foodRatings), 'rating');
-    add('Reviews', 'experience_rating', 'Average experience rating', average(experienceRatings), 'rating');
-    add('Reviews', 'preparation_rating', 'Average preparation rating', average(preparationRatings), 'rating');
-    add('Reviews', 'packaging_rating', 'Average packaging rating', average(packagingRatings), 'rating');
+    add('Payments', 'paid_orders', 'Paid orders', paidCount);
+    add('Payments', 'payment_rate', 'Payment completion rate', ratio(paidCount, completedCount), 'percent');
+    add('Reviews', 'review_count', 'Reviews received', reviewCount);
+    add('Reviews', 'review_rate', 'Review response rate', ratio(reviewCount, completedCount), 'percent');
+    add('Reviews', 'food_rating', 'Average food rating', average(foodRatingSum, foodRatingCount), 'rating');
+    add('Reviews', 'experience_rating', 'Average experience rating', average(experienceRatingSum, experienceRatingCount), 'rating');
+    add('Reviews', 'preparation_rating', 'Average preparation rating', average(preparationRatingSum, preparationRatingCount), 'rating');
+    add('Reviews', 'packaging_rating', 'Average packaging rating', average(packagingRatingSum, packagingRatingCount), 'rating');
     add('Reviews', 'low_food_reviews', 'Low food ratings', lowFoodOrders.length);
 
     for (const status of Object.keys(statusCounts)) {
         add('Order status', `${status}_count`, `${status} orders`, statusCounts[status]);
-        add('Order status', `${status}_share`, `${status} share`, ratio(statusCounts[status], periodOrders.length), 'percent');
+        add('Order status', `${status}_share`, `${status} share`, ratio(statusCounts[status], periodOrderCount), 'percent');
     }
     for (const [type, value] of Object.entries(orderTypes) as any) {
         add('Service type', `${type}_orders`, `${type} orders`, value.orders);
         add('Service type', `${type}_revenue`, `${type} revenue`, value.revenue, 'currency');
-        add('Service type', `${type}_share`, `${type} order share`, ratio(value.orders, validOrders.length), 'percent');
+        add('Service type', `${type}_share`, `${type} order share`, ratio(value.orders, validOrderCount), 'percent');
         add('Service type', `${type}_aov`, `${type} average order value`, value.orders ? value.revenue / value.orders : 0, 'currency');
     }
     for (const dimension of [
@@ -218,8 +267,8 @@ async function calculateAdvancedMetrics(restaurantId: string, start: Date, end: 
     const unclassified = menuItems.filter((item: any) => !item.dietaryType || item.dietaryType === 'unknown').length;
     return {
         revenue: { period: money(revenue), total: money(allTimeStats[0]?.revenue || 0) },
-        orders: { period: periodOrders.length, total: allTimeStats[0]?.count || 0 },
-        averageOrderValue: money(validOrders.length ? revenue / validOrders.length : 0),
+        orders: { period: periodOrderCount, total: allTimeStats[0]?.count || 0 },
+        averageOrderValue: money(validOrderCount ? revenue / validOrderCount : 0),
         unitsSold: units,
         topItems,
         leastFavoriteItems: leastItems,
@@ -234,15 +283,15 @@ async function calculateAdvancedMetrics(restaurantId: string, start: Date, end: 
         dailyTrend: [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date)).map((point) => ({ ...point, revenue: money(point.revenue) })),
         statusCounts,
         orderTypes,
-        payments: { paid: paid.length, unpaidCompleted: completed.filter((order: any) => order.paymentStatus !== 'paid').length, completionRate: ratio(paid.length, completed.length) },
+        payments: { paid: paidCount, unpaidCompleted: unpaidCompletedCount, completionRate: ratio(paidCount, completedCount) },
         customers: {
             identified: customers.length, repeat: repeatCustomers.length, repeatRate: ratio(repeatCustomers.length, customers.length),
             top: customers.sort((a, b) => b.spend - a.spend).slice(0, 10).map((customer) => ({ ...customer, spend: money(customer.spend) })),
         },
         ratings: {
-            count: reviewed.length, responseRate: ratio(reviewed.length, completed.length),
-            food: average(foodRatings), experience: average(experienceRatings),
-            preparation: average(preparationRatings), packaging: average(packagingRatings),
+            count: reviewCount, responseRate: ratio(reviewCount, completedCount),
+            food: average(foodRatingSum, foodRatingCount), experience: average(experienceRatingSum, experienceRatingCount),
+            preparation: average(preparationRatingSum, preparationRatingCount), packaging: average(packagingRatingSum, packagingRatingCount),
             lowFoodOrders,
         },
         dataQuality: { totalMenuItems: menuItems.length, unclassifiedDietaryItems: unclassified, classificationCoverage: ratio(menuItems.length - unclassified, menuItems.length) },
@@ -282,16 +331,16 @@ export class AnalyticsController {
                 console.warn('[Analytics] Redis unavailable, computing associations from DB:', (redisErr as Error).message);
             }
 
-            const orders = await Order.find({
+            const orders = Order.find({
                 restaurantId,
                 status: { $in: ['completed', 'served'] },
                 createdAt: { $gte: start, $lte: end }
-            }).select('items').lean();
+            }).select('items').lean().cursor();
 
             const itemSetCounts: Record<string, number> = {};
 
-            orders.forEach(order => {
-                if (!order.items || order.items.length < 2) return;
+            for await (const order of orders as any) {
+                if (!order.items || order.items.length < 2) continue;
 
                 const uniqueItems = Array.from(new Set(order.items.map((item: any) => item.name)))
                     .sort()
@@ -316,7 +365,7 @@ export class AnalyticsController {
                         }
                     }
                 }
-            });
+            }
 
             const rules = Object.entries(itemSetCounts)
                 .map(([jsonItems, frequency]) => ({
@@ -358,7 +407,7 @@ export class AnalyticsController {
             const start = startDate ? new Date(startDate as string) : new Date(new Date().setDate(new Date().getDate() - 30));
 
             // Check Redis cache first
-            const cacheKey = buildCacheKey('metrics-v2', restaurantId, start, end);
+            const cacheKey = buildCacheKey('metrics-v3', restaurantId, start, end);
             try {
                 const cached = await redis.get(cacheKey);
                 if (cached) {
@@ -369,7 +418,15 @@ export class AnalyticsController {
                 console.warn('[Analytics] Redis unavailable, fetching metrics from DB:', (redisErr as Error).message);
             }
 
-            const payload = await calculateAdvancedMetrics(restaurantId, start, end);
+            let calculation = metricsInFlight.get(cacheKey);
+            if (!calculation) {
+                calculation = calculateAdvancedMetrics(restaurantId, start, end);
+                metricsInFlight.set(cacheKey, calculation);
+                calculation.finally(() => {
+                    if (metricsInFlight.get(cacheKey) === calculation) metricsInFlight.delete(cacheKey);
+                }).catch(() => undefined);
+            }
+            const payload = await calculation;
 
             // Store in Redis cache (fire-and-forget)
             redis.set(cacheKey, JSON.stringify(payload), 'EX', METRICS_CACHE_TTL).catch((err: Error) =>
