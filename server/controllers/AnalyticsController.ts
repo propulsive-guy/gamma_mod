@@ -7,6 +7,9 @@ import MenuItem from '../models/MenuItem';
 // TTL constants (in seconds)
 const METRICS_CACHE_TTL = 5 * 60;       // 5 minutes
 const ASSOCIATIONS_CACHE_TTL = 10 * 60; // 10 minutes
+// Combination mining is cubic in the number of distinct items in a basket.
+// Keep pathological/imported orders from exhausting the API process.
+const MAX_ASSOCIATION_ITEMS_PER_ORDER = 20;
 
 /**
  * Build a deterministic Redis cache key scoped to restaurant + date range.
@@ -27,7 +30,9 @@ const waterName = /(^|\s)(water|mineral water|bottled water|aqua)(\s|$)/i;
 async function calculateAdvancedMetrics(restaurantId: string, start: Date, end: Date) {
     const objectId = new mongoose.Types.ObjectId(restaurantId);
     const [periodOrders, allTimeStats, menuItems] = await Promise.all([
-        Order.find({ restaurantId: objectId, createdAt: { $gte: start, $lte: end } }).lean(),
+        Order.find({ restaurantId: objectId, createdAt: { $gte: start, $lte: end } })
+            .select('createdAt status total items customerPhone customerName paymentStatus review orderType')
+            .lean(),
         Order.aggregate([
             { $match: { restaurantId: objectId, status: { $ne: 'cancelled' } } },
             { $group: { _id: null, revenue: { $sum: '$total' }, count: { $sum: 1 } } },
@@ -288,7 +293,9 @@ export class AnalyticsController {
             orders.forEach(order => {
                 if (!order.items || order.items.length < 2) return;
 
-                const uniqueItems = Array.from(new Set(order.items.map((item: any) => item.name))).sort() as string[];
+                const uniqueItems = Array.from(new Set(order.items.map((item: any) => item.name)))
+                    .sort()
+                    .slice(0, MAX_ASSOCIATION_ITEMS_PER_ORDER) as string[];
 
                 // 2-item combinations
                 for (let i = 0; i < uniqueItems.length; i++) {
