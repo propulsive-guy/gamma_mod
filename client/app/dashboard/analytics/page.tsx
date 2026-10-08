@@ -1,93 +1,92 @@
+import mongoose from 'mongoose';
 import { auth } from '@/lib/auth';
 import { redirect } from 'next/navigation';
-import { getAssociationRules, getBusinessMetrics } from '@/app/actions/analytics';
-import {
-    CurrencyDollarIcon,
-    ShoppingBagIcon,
-    FireIcon,
-    SparklesIcon,
-    ArrowTrendingUpIcon,
-    ArrowDownTrayIcon,
-} from '@heroicons/react/24/outline';
+import dbConnect from '@/lib/db';
+import Order from '@/models/Order';
 import { formatCurrency } from '@/lib/utils';
 import DateFilter from '@/components/dashboard/DateFilter';
-import { AdvancedAnalyticsDashboard } from '@/components/dashboard/AdvancedAnalyticsDashboard';
 import { getAnalyticsDateRange, getAnalyticsPeriodLabel, normalizeAnalyticsPeriod } from '@/lib/analyticsPeriod';
+import { ArrowDownTrayIcon, CurrencyDollarIcon, ShoppingBagIcon, ChartBarIcon } from '@heroicons/react/24/outline';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 interface PageProps {
     searchParams: Promise<{ period?: string }>;
 }
 
-export default async function AnalyticsPage(props: PageProps) {
-    const searchParams = await props.searchParams;
-    const session = await auth();
+type PeriodSummary = { orders: number; revenue: number };
+type TopItem = { name: string; quantity: number; revenue: number };
 
-    if (!session || !session.user.restaurantId) {
-        redirect('/auth/signin');
+export default async function AnalyticsPage({ searchParams }: PageProps) {
+    const [params, session] = await Promise.all([searchParams, auth()]);
+    if (!session?.user?.restaurantId) redirect('/auth/signin');
+
+    const period = normalizeAnalyticsPeriod(params.period);
+    const periodLabel = getAnalyticsPeriodLabel(period);
+    const { startDate, endDate } = getAnalyticsDateRange(period);
+    let periodSummary: PeriodSummary = { orders: 0, revenue: 0 };
+    let allTimeSummary: PeriodSummary = { orders: 0, revenue: 0 };
+    let topItems: TopItem[] = [];
+    let loadFailed = false;
+
+    try {
+        await dbConnect();
+        const restaurantId = new mongoose.Types.ObjectId(String(session.user.restaurantId));
+
+        // Aggregate in MongoDB so the serverless function never loads whole order
+        // documents or builds large in-memory analytics structures.
+        const [periodResult, allTimeResult] = await Promise.all([
+            Order.aggregate([
+                { $match: { restaurantId, status: { $ne: 'cancelled' }, createdAt: { $gte: startDate, $lte: endDate } } },
+                {
+                    $facet: {
+                        summary: [{ $group: { _id: null, orders: { $sum: 1 }, revenue: { $sum: '$total' } } }],
+                        topItems: [
+                            { $unwind: '$items' },
+                            {
+                                $group: {
+                                    _id: { $ifNull: ['$items.menuItemId', '$items.name'] },
+                                    name: { $first: '$items.name' },
+                                    quantity: { $sum: '$items.quantity' },
+                                    revenue: { $sum: { $multiply: ['$items.price', '$items.quantity'] } },
+                                },
+                            },
+                            { $sort: { quantity: -1, revenue: -1 } },
+                            { $limit: 8 },
+                            { $project: { _id: 0, name: 1, quantity: 1, revenue: 1 } },
+                        ],
+                    },
+                },
+            ]).allowDiskUse(true),
+            Order.aggregate([
+                { $match: { restaurantId, status: { $ne: 'cancelled' } } },
+                { $group: { _id: null, orders: { $sum: 1 }, revenue: { $sum: '$total' } } },
+            ]).allowDiskUse(true),
+        ]);
+
+        periodSummary = periodResult[0]?.summary[0] || periodSummary;
+        allTimeSummary = allTimeResult[0] || allTimeSummary;
+        topItems = periodResult[0]?.topItems || [];
+    } catch (error) {
+        loadFailed = true;
+        console.error('[AnalyticsPage] Could not calculate analytics:', error);
     }
 
-    const period = normalizeAnalyticsPeriod(searchParams.period);
-    const dateRange = getAnalyticsDateRange(period);
-    const periodLabel = getAnalyticsPeriodLabel(period);
-
-    const [associationsRes, metricsRes] = await Promise.all([
-        getAssociationRules(session.user.restaurantId, dateRange),
-        getBusinessMetrics(session.user.restaurantId, dateRange)
-    ]);
-
-    const associations = associationsRes.data;
-    const metrics = metricsRes.data;
-
-    const kpis = [
-        {
-            label: `Revenue (${periodLabel})`,
-            value: metrics ? formatCurrency(metrics.revenue.period) : '₹0',
-            icon: CurrencyDollarIcon,
-            iconBg: 'bg-emerald-50',
-            iconColor: 'text-emerald-600',
-            badge: periodLabel,
-            badgeBg: 'bg-emerald-50 text-emerald-700',
-        },
-        {
-            label: `Orders (${periodLabel})`,
-            value: metrics ? metrics.orders.period : 0,
-            icon: ShoppingBagIcon,
-            iconBg: 'bg-blue-50',
-            iconColor: 'text-blue-600',
-            badge: periodLabel,
-            badgeBg: 'bg-blue-50 text-blue-700',
-        },
-        {
-            label: 'Total Revenue',
-            value: metrics ? formatCurrency(metrics.revenue.total) : '₹0',
-            icon: ArrowTrendingUpIcon,
-            iconBg: 'bg-violet-50',
-            iconColor: 'text-violet-600',
-            badge: 'All Time',
-            badgeBg: 'bg-violet-50 text-violet-700',
-        },
-        {
-            label: 'Total Orders',
-            value: metrics ? metrics.orders.total : 0,
-            icon: ShoppingBagIcon,
-            iconBg: 'bg-amber-50',
-            iconColor: 'text-amber-600',
-            badge: 'All Time',
-            badgeBg: 'bg-amber-50 text-amber-700',
-        },
+    const averageOrder = periodSummary.orders > 0 ? periodSummary.revenue / periodSummary.orders : 0;
+    const cards = [
+        { label: `Revenue · ${periodLabel}`, value: formatCurrency(periodSummary.revenue), icon: CurrencyDollarIcon, tone: 'bg-emerald-50 text-emerald-600' },
+        { label: `Orders · ${periodLabel}`, value: periodSummary.orders.toLocaleString('en-IN'), icon: ShoppingBagIcon, tone: 'bg-blue-50 text-blue-600' },
+        { label: 'Average order value', value: formatCurrency(averageOrder), icon: ChartBarIcon, tone: 'bg-violet-50 text-violet-600' },
+        { label: 'All-time revenue', value: formatCurrency(allTimeSummary.revenue), icon: CurrencyDollarIcon, tone: 'bg-amber-50 text-amber-600' },
     ];
 
     return (
         <div className="space-y-6">
-            {/* Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
                 <div>
-                    <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-                        Analytics
-                    </h1>
-                    <p className="text-slate-500 mt-1 text-sm">
-                        Performance insights &amp; patterns
-                    </p>
+                    <h1 className="text-2xl font-bold tracking-tight text-slate-900">Analytics</h1>
+                    <p className="mt-1 text-sm text-slate-500">Sales overview for {periodLabel.toLowerCase()}.</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
                     <DateFilter />
@@ -97,141 +96,46 @@ export default async function AnalyticsPage(props: PageProps) {
                 </div>
             </div>
 
-            {/* KPI Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-                {kpis.map((kpi, i) => (
-                    <div
-                        key={i}
-                        className="bg-white rounded-2xl border border-slate-200/60 p-5 hover:shadow-md hover:shadow-slate-200/50 transition-all duration-300"
-                    >
-                        <div className="flex items-start justify-between mb-4">
-                            <div className={`p-2.5 rounded-xl ${kpi.iconBg}`}>
-                                <kpi.icon className={`h-5 w-5 ${kpi.iconColor}`} />
-                            </div>
-                            <span className={`text-[10px] font-semibold px-2 py-1 rounded-full uppercase tracking-wider ${kpi.badgeBg}`}>
-                                {kpi.badge}
-                            </span>
-                        </div>
-                        <p className="text-2xl font-bold text-slate-900 tracking-tight">
-                            {kpi.value}
-                        </p>
-                        <p className="text-sm text-slate-500 mt-0.5">{kpi.label}</p>
-                    </div>
+            {loadFailed && (
+                <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                    Analytics data could not be loaded right now. The rest of your dashboard is still available.
+                </div>
+            )}
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {cards.map((card) => (
+                    <section key={card.label} className="rounded-2xl border border-slate-200/70 bg-white p-5">
+                        <div className={`inline-flex rounded-xl p-2 ${card.tone}`}><card.icon className="h-5 w-5" /></div>
+                        <p className="mt-3 text-2xl font-bold text-slate-900">{card.value}</p>
+                        <p className="mt-1 text-xs text-slate-500">{card.label}</p>
+                    </section>
                 ))}
             </div>
 
-            <AdvancedAnalyticsDashboard metrics={metrics} periodLabel={periodLabel} />
-
-            {/* Content Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Top Selling Items */}
-                <div className="bg-white rounded-2xl border border-slate-200/60 overflow-hidden lg:col-span-1 h-fit">
-                    <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-3">
-                        <div className="p-2 rounded-lg bg-red-50">
-                            <FireIcon className="w-4 h-4 text-red-500" />
-                        </div>
-                        <div>
-                            <h2 className="text-sm font-semibold text-slate-900">Top Items</h2>
-                            <p className="text-xs text-slate-500">{periodLabel}</p>
-                        </div>
-                    </div>
-                    <div>
-                        {!metrics?.topItems || metrics.topItems.length === 0 ? (
-                            <div className="p-8 text-center">
-                                <p className="text-slate-400 text-sm">No data available</p>
-                                <p className="text-slate-400 text-xs mt-1">Complete orders to see insights</p>
-                            </div>
-                        ) : (
-                            <div className="divide-y divide-slate-50">
-                                {metrics.topItems.map((item, i) => (
-                                    <div key={i} className="px-5 py-3.5 flex items-center justify-between hover:bg-slate-50/50 transition-colors">
-                                        <div className="flex items-center gap-3">
-                                            <span className={`w-6 h-6 flex items-center justify-center rounded-full text-xs font-bold ${i < 3
-                                                ? 'bg-amber-100 text-amber-700'
-                                                : 'bg-slate-100 text-slate-500'
-                                                }`}>
-                                                {i + 1}
-                                            </span>
-                                            <span className="font-medium text-slate-900 text-sm">{item.name}</span>
-                                        </div>
-                                        <div className="text-right">
-                                            <div className="text-sm font-semibold text-slate-900">{item.quantity} sold</div>
-                                            <div className="text-xs text-slate-400">{formatCurrency(item.revenue)}</div>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
+            <section className="overflow-hidden rounded-2xl border border-slate-200/70 bg-white">
+                <div className="border-b border-slate-100 px-5 py-4">
+                    <h2 className="text-sm font-bold text-slate-900">Top-selling items</h2>
+                    <p className="mt-0.5 text-xs text-slate-500">Ranked by units sold · {periodLabel}</p>
                 </div>
-
-                {/* Association Mining */}
-                <div className="bg-white rounded-2xl border border-slate-200/60 overflow-hidden lg:col-span-2">
-                    <div className="px-5 py-4 border-b border-slate-100 flex justify-between items-center">
-                        <div className="flex items-center gap-3">
-                            <div className="p-2 rounded-lg bg-amber-50">
-                                <SparklesIcon className="w-4 h-4 text-amber-500" />
+                {!topItems.length ? (
+                    <p className="p-8 text-center text-sm text-slate-400">No completed sales in this period.</p>
+                ) : (
+                    <div className="divide-y divide-slate-100">
+                        {topItems.map((item, index) => (
+                            <div key={item.name} className="flex items-center justify-between gap-4 px-5 py-3.5">
+                                <div className="flex min-w-0 items-center gap-3">
+                                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-600">{index + 1}</span>
+                                    <span className="truncate text-sm font-semibold text-slate-800">{item.name}</span>
+                                </div>
+                                <div className="shrink-0 text-right">
+                                    <p className="text-sm font-bold text-slate-800">{item.quantity} sold</p>
+                                    <p className="text-xs text-slate-400">{formatCurrency(item.revenue)}</p>
+                                </div>
                             </div>
-                            <div>
-                                <h2 className="text-sm font-semibold text-slate-900">Frequently Bought Together</h2>
-                                <p className="text-xs text-slate-500">Pattern analysis from orders</p>
-                            </div>
-                        </div>
-                        <span className="text-[10px] font-semibold px-2 py-1 bg-sky-50 text-sky-700 rounded-full uppercase tracking-wider">
-                            {periodLabel}
-                        </span>
+                        ))}
                     </div>
-
-                    <div className="p-5">
-                        {!associations || associations.length === 0 ? (
-                            <div className="text-center py-12">
-                                <SparklesIcon className="w-8 h-8 text-slate-300 mx-auto mb-3" />
-                                <p className="text-slate-500 text-sm font-medium">Not enough data to find patterns</p>
-                                <p className="text-slate-400 text-xs mt-1">Complete more orders to see insights</p>
-                            </div>
-                        ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {associations.map((rule, index) => (
-                                    <div
-                                        key={index}
-                                        className="p-4 rounded-xl border border-slate-200/60 hover:border-sky-200 hover:shadow-sm transition-all group"
-                                    >
-                                        <div className="flex justify-between items-start mb-3">
-                                            <div className="flex flex-wrap gap-1.5 items-center">
-                                                {rule.items.map((item, i) => (
-                                                    <div key={i} className="flex items-center">
-                                                        <span className="text-sm font-medium text-slate-900 bg-slate-50 px-2 py-0.5 rounded-md border border-slate-100">
-                                                            {item}
-                                                        </span>
-                                                        {i < rule.items.length - 1 && (
-                                                            <span className="text-slate-300 text-xs mx-1">+</span>
-                                                        )}
-                                                    </div>
-                                                ))}
-                                            </div>
-                                            <div className="flex flex-col items-end flex-shrink-0 ml-2">
-                                                <span className="text-lg font-bold text-sky-600 leading-none">
-                                                    {rule.frequency}
-                                                </span>
-                                                <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">
-                                                    Orders
-                                                </span>
-                                            </div>
-                                        </div>
-
-                                        <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                                            <div
-                                                className="h-full bg-sky-400 rounded-full group-hover:bg-sky-500 transition-colors"
-                                                style={{ width: `${Math.min((rule.frequency / associations[0].frequency) * 100, 100)}%` }}
-                                            />
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                </div>
-            </div>
+                )}
+            </section>
         </div>
     );
 }
