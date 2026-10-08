@@ -14,16 +14,17 @@ export class InventoryController {
         if (!Array.isArray(lines) || lines.length < 1 || lines.length > 40) {
             return res.status(400).json({ error: 'Submit between 1 and 40 reviewed bill lines' });
         }
-        const normalized = [] as { inventoryItemId: string; quantity: number; unitCost: number }[];
+        const normalized = [] as { inventoryItemId: string; quantity: number; unit: string; unitCost: number }[];
         for (const line of lines) {
             const id = String(line?.inventoryItemId || '');
             const quantity = Number(line?.quantity);
+            const unit = String(line?.unit || '');
             const unitCost = Number(line?.unitCost);
-            if (!mongoose.Types.ObjectId.isValid(id) || !Number.isFinite(quantity) || quantity <= 0 || quantity > 1_000_000 ||
+            if (!mongoose.Types.ObjectId.isValid(id) || !INVENTORY_UNITS.includes(unit as any) || !Number.isFinite(quantity) || quantity <= 0 || quantity > 1_000_000 ||
                 !Number.isFinite(unitCost) || unitCost < 0 || unitCost > 10_000_000) {
-                return res.status(400).json({ error: 'Each line needs a valid inventory item, quantity, and unit cost' });
+                return res.status(400).json({ error: 'Each line needs a valid inventory item, unit, quantity, and unit cost' });
             }
-            normalized.push({ inventoryItemId: id, quantity: rounded(quantity), unitCost: rounded(unitCost) });
+            normalized.push({ inventoryItemId: id, quantity: rounded(quantity), unit, unitCost: rounded(unitCost) });
         }
         const note = String(billReference || '').trim().slice(0, 80);
         const session = await mongoose.startSession();
@@ -31,11 +32,11 @@ export class InventoryController {
             await session.withTransaction(async () => {
                 for (const line of normalized) {
                     const before = await InventoryItem.findOneAndUpdate(
-                        { _id: line.inventoryItemId, restaurantId: req.user!.restaurantId, isActive: true },
+                        { _id: line.inventoryItemId, restaurantId: req.user!.restaurantId, isActive: true, unit: line.unit },
                         { $inc: { currentStock: line.quantity }, $set: { costPerUnit: line.unitCost } },
                         { session, runValidators: true },
                     );
-                    if (!before) throw new Error('An inventory item was not found. No changes were saved.');
+                    if (!before) throw new Error('An inventory item was not found or its unit does not match. No changes were saved.');
                     const stockAfter = rounded(before.currentStock + line.quantity);
                     await StockMovement.create([{
                         restaurantId: req.user!.restaurantId, inventoryItemId: before._id, type: 'purchase',

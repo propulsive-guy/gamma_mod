@@ -85,7 +85,7 @@ export function InventoryBillScanner({ items }: { items: InventoryItem[] }) {
         setSaving(true);
         const result = await applyInventoryBillPurchase({
             billReference: reference.trim(),
-            lines: rows.map((row) => ({ inventoryItemId: row.inventoryItemId, quantity: row.quantity, unitCost: row.unitCost })),
+            lines: rows.map((row) => ({ inventoryItemId: row.inventoryItemId, quantity: row.quantity, unit: row.unit, unitCost: row.unitCost })),
         });
         setSaving(false);
         if (!result.success) return toast.error(result.error || 'Could not update inventory');

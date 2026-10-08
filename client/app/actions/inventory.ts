@@ -25,7 +25,7 @@ const rounded = (value: unknown) => Math.round(Number(value) * 10000) / 10000;
 
 export async function applyInventoryBillPurchase(data: {
     billReference: string;
-    lines: { inventoryItemId: string; quantity: number; unitCost: number }[];
+    lines: { inventoryItemId: string; quantity: number; unit: string; unitCost: number }[];
 }) {
     try {
         if (!Array.isArray(data.lines) || !data.lines.length || data.lines.length > 40) {
