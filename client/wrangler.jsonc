@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "businesses",
+
+"name": "gamma-mod",
   "main": ".open-next/worker.js",
   "compatibility_date": "2026-10-04",
   "compatibility_flags": ["nodejs_compat"],
