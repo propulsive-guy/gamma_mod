@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-{
+
   // ...
   "vars": {
     "MONGODB_URI": "mongodb://test1:test121@ac-n336euc-shard-00-00.3jrysla.mongodb.net:27017,ac-n336euc-shard-00-01.3jrysla.mongodb.net:27017,ac-n336euc-shard-00-02.3jrysla.mongodb.net:27017/gamma?authSource=admin&replicaSet=atlas-3q3m5n-shard-0&tls=true&retryWrites=true&w=majority&appName=Cluster0"
