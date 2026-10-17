@@ -175,8 +175,12 @@ async function extractWithGemini(formData: FormData, task: GeminiTask) {
             ? { success: true as const, lines: rows as InventoryLine[] }
             : { success: true as const, items: rows as MenuLine[] };
     } catch (error) {
-        console.error('Gemini image extraction request failed:', error);
-        return { success: false as const, error: 'Could not contact Gemini. Check the server configuration and try again.' };
+        const name = error instanceof Error ? error.name : 'UnknownError';
+        console.error('Gemini image extraction request failed:', { name, message: error instanceof Error ? error.message : String(error) });
+        if (name === 'TimeoutError' || name === 'AbortError') {
+            return { success: false as const, error: 'Gemini took too long to read this bill. Please try again.' };
+        }
+        return { success: false as const, error: 'The image reached the app, but Gemini could not complete the scan. Check the Cloudflare Worker logs for the underlying error.' };
     }
 }
 

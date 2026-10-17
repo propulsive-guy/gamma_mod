@@ -50,7 +50,17 @@ export function InventoryBillScanner({ items }: { items: InventoryItem[] }) {
             toast.success(`Found ${result.lines.length} lines. Review each line before updating stock.`);
         } catch (error) {
             console.error('Gemini inventory image reading error:', error);
-            toast.error('Could not read this photo. Try a brighter, sharper image.');
+            const details = error instanceof Error ? error.message : '';
+            const lowerDetails = details.toLowerCase();
+            if (lowerDetails.includes('413') || lowerDetails.includes('too large') || lowerDetails.includes('payload')) {
+                toast.error('This photo is too large to upload. Choose a smaller image or take a screenshot of the bill.');
+            } else if (lowerDetails.includes('server action') || lowerDetails.includes('deployment')) {
+                toast.error('The bill reader deployment is out of date. Reload the app and try again.');
+            } else if (details) {
+                toast.error(`Bill scan failed: ${details.slice(0, 150)}`);
+            } else {
+                toast.error('The bill scan request failed before Gemini could read the image. Check your connection and retry.');
+            }
         } finally { setScanning(false); }
     };
 
