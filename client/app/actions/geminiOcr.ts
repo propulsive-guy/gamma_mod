@@ -130,7 +130,9 @@ async function extractWithGemini(formData: FormData, task: GeminiTask) {
                         ],
                     }],
                     generationConfig: {
-                        responseFormat: { text: { mimeType: 'application/json', schema } },
+                        // responseFormat.text.mimeType is a protobuf enum, not
+                        // an HTTP MIME string. Gemini expects APPLICATION_JSON.
+                        responseFormat: { text: { mimeType: 'APPLICATION_JSON', schema } },
                         thinkingConfig: { thinkingLevel: 'low' },
                         maxOutputTokens: 8192,
                     },
