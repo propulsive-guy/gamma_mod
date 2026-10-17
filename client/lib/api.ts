@@ -1,10 +1,11 @@
 import { cookies } from 'next/headers';
+import { getBackendUrl } from '@/lib/backendUrl';
 
 /**
  * Perform a fetch request to the Express backend, automatically forwarding user session cookies.
  */
 export async function apiFetch(path: string, options: RequestInit = {}) {
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+    const backendUrl = getBackendUrl();
     
     const headers = new Headers(options.headers);
     

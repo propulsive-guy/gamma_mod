@@ -1,11 +1,12 @@
 import { notFound } from 'next/navigation';
 import { CustomerMenu } from '@/components/customer/CustomerMenu';
 import { unstable_cache } from 'next/cache';
+import { getBackendUrl } from '@/lib/backendUrl';
 
 // Cached data fetching functions - Decoupled to fetch from backend REST APIs
 const getCachedMenu = (restaurantId: string) => unstable_cache(
     async () => {
-        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+        const backendUrl = getBackendUrl();
         const res = await fetch(`${backendUrl}/api/v1/menu/public/${restaurantId}`);
         return res.ok ? res.json() : [];
     },
@@ -15,7 +16,7 @@ const getCachedMenu = (restaurantId: string) => unstable_cache(
 
 const getCachedRestaurant = (id: string) => unstable_cache(
     async () => {
-        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+        const backendUrl = getBackendUrl();
         const res = await fetch(`${backendUrl}/api/v1/restaurant/public/${id}`);
         return res.ok ? res.json() : null;
     },
@@ -25,7 +26,7 @@ const getCachedRestaurant = (id: string) => unstable_cache(
 
 const getCachedTable = (id: string) => unstable_cache(
     async () => {
-        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+        const backendUrl = getBackendUrl();
         const res = await fetch(`${backendUrl}/api/v1/tables/public/${id}`);
         return res.ok ? res.json() : null;
     },
@@ -56,4 +57,3 @@ export default async function CustomerTablePage(props: {
         />
     );
 }
-

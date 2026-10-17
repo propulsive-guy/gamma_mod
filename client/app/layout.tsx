@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Toaster } from "react-hot-toast";
+import { BackendUrlProvider } from "@/components/providers/BackendUrlProvider";
+import { getBackendUrl } from "@/lib/backendUrl";
 
 export const metadata: Metadata = {
   title: "BitByte",
@@ -15,8 +17,10 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="font-sans antialiased">
-        {children}
-        <Toaster position="top-right" />
+        <BackendUrlProvider backendUrl={getBackendUrl()}>
+          {children}
+          <Toaster position="top-right" />
+        </BackendUrlProvider>
       </body>
     </html>
   );

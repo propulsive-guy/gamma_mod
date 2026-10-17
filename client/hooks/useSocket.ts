@@ -2,18 +2,18 @@
 
 import { useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { useBackendUrl } from '@/components/providers/BackendUrlProvider';
 
 export const useSocket = (restaurantId?: string) => {
     const [socket, setSocket] = useState<Socket | null>(null);
+    const backendUrl = useBackendUrl();
 
     useEffect(() => {
         if (!restaurantId) return;
 
         // Socket.IO runs on the Express backend (EC2), not on Vercel
-        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || '';
-
         if (!backendUrl) {
-            console.warn('[useSocket] NEXT_PUBLIC_BACKEND_URL not set, skipping socket connection');
+            console.warn('[useSocket] BACKEND_URL not set, skipping socket connection');
             return;
         }
 
@@ -39,7 +39,7 @@ export const useSocket = (restaurantId?: string) => {
         return () => {
             socketInstance.disconnect();
         };
-    }, [restaurantId]);
+    }, [backendUrl, restaurantId]);
 
     return socket;
 };

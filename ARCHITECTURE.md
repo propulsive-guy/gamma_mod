@@ -736,7 +736,7 @@ Allowed origins: `NEXTAUTH_URL`, `NEXT_PUBLIC_BASE_URL`, `NEXT_PUBLIC_APP_URL`, 
 | `AUTH_SECRET` | Server + Client | ✅ | NextAuth JWT signing key |
 | `NEXTAUTH_SECRET` | Client | ✅ | NextAuth fallback secret |
 | `NEXTAUTH_URL` | Client | ✅ | App base URL (NextAuth callbacks) |
-| `NEXT_PUBLIC_BACKEND_URL` | Client | ✅ prod | Express API URL (e.g. `https://api.bistro.com`) |
+| `BACKEND_URL` | Server | ✅ prod | Express API URL (e.g. `https://api.bistro.com`) |
 | `NEXT_PUBLIC_BASE_URL` | Server | ✅ | QR code URL base (e.g. `https://bistro.com`) |
 | `REDIS_URL` | Server | ✅ prod | Redis connection (sessions + analytics cache) |
 | `CLOUDINARY_CLOUD_NAME` | Server | ✅ | Cloudinary account |

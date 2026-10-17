@@ -1,6 +1,7 @@
 import NextAuth from 'next-auth';
 import { authConfig } from '@/lib/auth.config';
 import Credentials from 'next-auth/providers/credentials';
+import { getBackendUrl } from '@/lib/backendUrl';
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
     ...authConfig,
@@ -15,7 +16,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
                     return null;
                 }
 
-                const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+                const backendUrl = getBackendUrl();
                 try {
                     const res = await fetch(`${backendUrl}/api/v1/auth/verify`, {
                         method: 'POST',

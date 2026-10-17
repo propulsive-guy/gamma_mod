@@ -15,7 +15,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
                     return null;
                 }
 
-                const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+                const backendUrl = process.env.BACKEND_URL || (process.env.NODE_ENV !== 'production' ? 'http://localhost:3001' : '');
+                if (!backendUrl) throw new Error('BACKEND_URL is not configured');
                 try {
                     const res = await fetch(`${backendUrl}/api/v1/auth/verify`, {
                         method: 'POST',

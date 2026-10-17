@@ -2,6 +2,7 @@
 
 import { signIn } from '@/lib/auth';
 import { AuthError } from 'next-auth';
+import { getBackendUrl } from '@/lib/backendUrl';
 
 export async function signInAction(email: string, password: string) {
     try {
@@ -30,7 +31,7 @@ export async function signUpAction(data: {
     secretKey: string;
 }) {
     try {
-        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+        const backendUrl = getBackendUrl();
         const res = await fetch(`${backendUrl}/api/v1/auth/signup`, {
             method: 'POST',
             headers: {

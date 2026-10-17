@@ -1,6 +1,7 @@
 'use server';
 
 import { apiFetch } from '@/client-lib/api';
+import { getBackendUrl } from '@/lib/backendUrl';
 import { revalidatePath } from 'next/cache';
 
 /**
@@ -76,7 +77,7 @@ export async function getOrders() {
  */
 export async function getOrdersBySession(sessionId: string, tableId: string) {
     try {
-        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+        const backendUrl = getBackendUrl();
         const res = await fetch(
             `${backendUrl}/api/v1/orders/by-session?sessionId=${sessionId}&tableId=${tableId}`,
             { cache: 'no-store' }
@@ -108,7 +109,7 @@ export async function prepareCustomerCheckout(data: {
     reviewText?: string;
 }) {
     try {
-        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+        const backendUrl = getBackendUrl();
         const { orderId, ...body } = data;
         const res = await fetch(`${backendUrl}/api/v1/orders/${orderId}/checkout`, {
             method: 'POST',

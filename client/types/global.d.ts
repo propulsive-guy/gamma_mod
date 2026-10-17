@@ -9,7 +9,7 @@ declare global {
             MONGODB_URI: string;
             NEXTAUTH_SECRET: string;
             AUTH_SECRET: string;
-            NEXT_PUBLIC_BACKEND_URL: string;
+            BACKEND_URL: string;
             NEXT_PUBLIC_BASE_URL: string;
             SIGNUP_SECRET_KEY: string;
         }
