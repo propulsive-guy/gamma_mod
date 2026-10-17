@@ -5,6 +5,8 @@ import InventoryItem from '@/models/InventoryItem';
 import StockMovement from '@/models/StockMovement';
 import { InventoryManager } from '@/components/dashboard/InventoryManager';
 
+export const maxDuration = 60;
+
 export default async function InventoryPage() {
     const session = await auth();
     if (!session?.user.restaurantId) redirect('/auth/signin');

@@ -1,23 +1,19 @@
 'use server';
 
 import { auth } from '@/lib/auth';
-import { getCloudflareContext } from '@opennextjs/cloudflare';
 
 type GeminiTask = 'inventory' | 'menu';
 type InventoryLine = { name: string; quantity: number; unit: string; unitCost: number; sourceText: string };
 type MenuLine = { name: string; description: string; price: number; category: string };
 
 const MAX_IMAGE_BYTES = 9 * 1024 * 1024;
+const GEMINI_REQUEST_TIMEOUT_MS = 24_000;
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
 const INVENTORY_UNITS = new Set(['kg', 'g', 'l', 'ml', 'piece', 'pack', 'box', 'bottle', 'can', '']);
 
 function getGeminiApiKey() {
-    try {
-        const runtimeSecret = (getCloudflareContext().env as CloudflareEnv & { Gemini_bitbyte?: string }).Gemini_bitbyte;
-        if (typeof runtimeSecret === 'string' && runtimeSecret.trim()) return runtimeSecret.trim();
-    } catch {
-        // Local Next.js development may not have a Cloudflare runtime context.
-    }
+    // Gemini calls run in the Vercel-hosted Next.js server action. Keep the key
+    // server-only and configure Gemini_bitbyte in Vercel project environment variables.
     return process.env.Gemini_bitbyte?.trim();
 }
 
@@ -133,7 +129,9 @@ async function extractWithGemini(formData: FormData, task: GeminiTask) {
                     }],
                     generationConfig: { responseMimeType: 'application/json', responseSchema: schema, temperature: 0, maxOutputTokens: 8192 },
                 }),
-                signal: AbortSignal.timeout(45_000),
+                // Keep room under the route's 60s Vercel function duration for
+                // the optional second extraction pass and auth/database work.
+                signal: AbortSignal.timeout(GEMINI_REQUEST_TIMEOUT_MS),
             });
             if (!response.ok) {
                 console.error('Gemini image extraction failed with status:', response.status);
@@ -180,7 +178,7 @@ async function extractWithGemini(formData: FormData, task: GeminiTask) {
         if (name === 'TimeoutError' || name === 'AbortError') {
             return { success: false as const, error: 'Gemini took too long to read this bill. Please try again.' };
         }
-        return { success: false as const, error: 'The image reached the app, but Gemini could not complete the scan. Check the Cloudflare Worker logs for the underlying error.' };
+        return { success: false as const, error: 'The image reached the app, but Gemini could not complete the scan. Check the Vercel Function logs for the underlying error.' };
     }
 }
 

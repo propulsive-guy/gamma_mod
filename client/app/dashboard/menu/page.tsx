@@ -5,6 +5,8 @@ import MenuItem from '@/models/MenuItem';
 import InventoryItem from '@/models/InventoryItem';
 import { MenuList } from '@/components/dashboard/MenuList';
 
+export const maxDuration = 60;
+
 export default async function MenuPage() {
     const session = await auth();
 
