@@ -10,10 +10,18 @@ import { prepareScanImage } from '@/lib/prepareScanImage';
 
 type InventoryItem = { _id: string; name: string; unit: string; currentStock: number; costPerUnit: number };
 type ParsedBillLine = { name: string; quantity: number; unit: string; unitCost: number; sourceText: string };
-type ReviewLine = ParsedBillLine & { id: string; inventoryItemId: string };
+type ReviewLine = ParsedBillLine & { id: string; inventoryItemId: string; createNew: boolean; newItemName: string };
 const units = ['kg', 'g', 'l', 'ml', 'piece', 'pack', 'box', 'bottle', 'can'];
 const newId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const normalizedName = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '');
+const inferredUnit = (name: string, unit: string) => {
+    if (units.includes(unit)) return unit;
+    if (/\b(?:bottle|drink|juice|water|soft drink)\b|\d+\s?ml\b/i.test(name)) return 'bottle';
+    if (/\bkg\b/i.test(name)) return 'kg';
+    if (/\bg\b/i.test(name)) return 'g';
+    if (/\bl\b/i.test(name)) return 'l';
+    return 'piece';
+};
 
 export function InventoryBillScanner({ items }: { items: InventoryItem[] }) {
     const router = useRouter();
@@ -46,7 +54,14 @@ export function InventoryBillScanner({ items }: { items: InventoryItem[] }) {
             if (!result.success || !result.lines) return toast.error(result.error || 'Gemini could not find inventory rows.');
             setRows(result.lines.map((row) => {
                 const match = items.find((item) => normalizedName(item.name) === normalizedName(row.name));
-                return { ...row, id: newId(), inventoryItemId: match?._id || '' };
+                return {
+                    ...row,
+                    id: newId(),
+                    inventoryItemId: match?._id || '',
+                    createNew: !match,
+                    newItemName: row.name,
+                    unit: match?.unit || inferredUnit(row.name, row.unit),
+                };
             }));
             toast.success(`Found ${result.lines.length} lines. Review each line before updating stock.`);
         } catch (error) {
@@ -66,16 +81,20 @@ export function InventoryBillScanner({ items }: { items: InventoryItem[] }) {
     };
 
     const updateRow = (id: string, patch: Partial<ReviewLine>) => setRows((current) => current.map((row) => row.id === id ? { ...row, ...patch } : row));
-    const addRow = () => setRows((current) => [...current, { id: newId(), name: '', quantity: 1, unit: '', unitCost: 0, sourceText: 'Manually added', inventoryItemId: '' }]);
+    const addRow = () => setRows((current) => [...current, { id: newId(), name: '', quantity: 1, unit: 'piece', unitCost: 0, sourceText: 'Manually added', inventoryItemId: '', createNew: true, newItemName: '' }]);
     const selectedItem = (row: ReviewLine) => items.find((item) => item._id === row.inventoryItemId);
-    const invalidRow = (row: ReviewLine) => !row.inventoryItemId || !row.name.trim() || !Number.isFinite(row.quantity) || row.quantity <= 0 || !Number.isFinite(row.unitCost) || row.unitCost < 0 || (row.unit && selectedItem(row)?.unit !== row.unit);
+    const invalidRow = (row: ReviewLine) => (!row.inventoryItemId && !row.createNew) || !row.name.trim() || (row.createNew && (!row.newItemName.trim() || row.newItemName.trim().length > 120 || !units.includes(row.unit))) || !Number.isFinite(row.quantity) || row.quantity <= 0 || !Number.isFinite(row.unitCost) || row.unitCost < 0 || (row.inventoryItemId && selectedItem(row)?.unit !== row.unit);
 
     const apply = async () => {
         if (!rows.length || rows.some(invalidRow)) return toast.error('Select an inventory item and check each quantity, unit, and cost');
         setSaving(true);
         const result = await applyInventoryBillPurchase({
             billReference: reference.trim(),
-            lines: rows.map((row) => ({ inventoryItemId: row.inventoryItemId, quantity: row.quantity, unit: row.unit, unitCost: row.unitCost })),
+            lines: rows.map((row) => ({
+                inventoryItemId: row.inventoryItemId,
+                ...(row.createNew ? { newItemName: row.newItemName.trim() } : {}),
+                quantity: row.quantity, unit: row.unit, unitCost: row.unitCost,
+            })),
         });
         setSaving(false);
         if (!result.success) return toast.error(result.error || 'Could not update inventory');
@@ -97,11 +116,15 @@ export function InventoryBillScanner({ items }: { items: InventoryItem[] }) {
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-bold text-slate-900">Review stock changes</h3><p className="text-xs text-slate-500">OCR suggestions can be wrong. Confirm the item and unit on every line.</p></div><button type="button" onClick={addRow} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700"><PlusIcon className="h-4 w-4" /> Add row</button></div>
             <label className="mb-4 block max-w-sm text-xs font-semibold text-slate-600">Bill / invoice reference<input value={reference} maxLength={80} onChange={(event) => setReference(event.target.value)} placeholder="Optional" className={`${inputClass} mt-1`} /></label>
             <div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">{rows.map((row) => <div key={row.id} className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1.3fr_1.5fr_0.65fr_0.7fr_auto] sm:items-end">
-                <label className="text-[11px] font-semibold text-slate-500">Read as<input value={row.name} onChange={(event) => updateRow(row.id, { name: event.target.value })} className={`${inputClass} mt-1`} /></label>
-                <label className="text-[11px] font-semibold text-slate-500">Inventory item<select value={row.inventoryItemId} onChange={(event) => { const item = items.find((candidate) => candidate._id === event.target.value); updateRow(row.id, { inventoryItemId: event.target.value, unit: row.unit || item?.unit || '' }); }} className={`${inputClass} mt-1`}><option value="">Choose item</option>{items.map((item) => <option key={item._id} value={item._id}>{item.name} · {item.unit}</option>)}</select></label>
+                <label className="text-[11px] font-semibold text-slate-500">Read as<input value={row.name} onChange={(event) => updateRow(row.id, { name: event.target.value, ...(row.createNew ? { newItemName: event.target.value } : {}) })} className={`${inputClass} mt-1`} /></label>
+                <label className="text-[11px] font-semibold text-slate-500">Inventory item<select value={row.createNew ? '__new__' : row.inventoryItemId} onChange={(event) => {
+                    if (event.target.value === '__new__') updateRow(row.id, { inventoryItemId: '', createNew: true, newItemName: row.newItemName || row.name, unit: inferredUnit(row.name, row.unit) });
+                    else { const item = items.find((candidate) => candidate._id === event.target.value); updateRow(row.id, { inventoryItemId: item?._id || '', createNew: false, unit: item?.unit || row.unit }); }
+                }} className={`${inputClass} mt-1`}><option value="">Choose existing item</option>{items.map((item) => <option key={item._id} value={item._id}>{item.name} · {item.unit}</option>)}<option value="__new__">＋ Add as a new inventory item</option></select></label>
                 <label className="text-[11px] font-semibold text-slate-500">Quantity<input type="number" min="0.0001" step="0.0001" value={row.quantity} onChange={(event) => updateRow(row.id, { quantity: Number(event.target.value) })} className={`${inputClass} mt-1`} /></label>
                 <label className="text-[11px] font-semibold text-slate-500">Cost / unit (₹)<input type="number" min="0" step="0.01" value={row.unitCost} onChange={(event) => updateRow(row.id, { unitCost: Number(event.target.value) })} className={`${inputClass} mt-1`} /></label>
                 <button type="button" onClick={() => setRows((current) => current.filter((item) => item.id !== row.id))} aria-label="Remove bill line" className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"><TrashIcon className="h-5 w-5" /></button>
+                {row.createNew && <div className="grid gap-2 rounded-lg border border-sky-200 bg-sky-50 p-3 sm:col-span-5 sm:grid-cols-[1fr_10rem] sm:items-end"><label className="text-[11px] font-semibold text-sky-800">New inventory item name<input value={row.newItemName} maxLength={120} onChange={(event) => updateRow(row.id, { newItemName: event.target.value })} placeholder="Name to add to inventory" className={`${inputClass} mt-1`} /></label><label className="text-[11px] font-semibold text-sky-800">Stock unit<select value={row.unit} onChange={(event) => updateRow(row.id, { unit: event.target.value })} className={`${inputClass} mt-1`}>{units.map((unit) => <option key={unit} value={unit}>{unit}</option>)}</select></label><p className="text-xs text-sky-800 sm:col-span-2">This item will be created and its stock added after you confirm this reviewed bill.</p></div>}
                 {((row.quantity <= 0 || row.unitCost < 0) && <p className="text-xs font-medium text-amber-700 sm:col-span-5">Quantity or unit cost could not be read clearly. Enter it before confirming.</p>)}
                 {row.inventoryItemId && row.unit !== selectedItem(row)?.unit && <p className="text-xs font-medium text-amber-700 sm:col-span-5">Bill unit ({row.unit}) differs from inventory unit ({selectedItem(row)?.unit}). Convert the quantity before applying.</p>}
             </div>)}</div>

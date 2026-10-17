@@ -14,25 +14,48 @@ export class InventoryController {
         if (!Array.isArray(lines) || lines.length < 1 || lines.length > 40) {
             return res.status(400).json({ error: 'Submit between 1 and 40 reviewed bill lines' });
         }
-        const normalized = [] as { inventoryItemId: string; quantity: number; unit: string; unitCost: number }[];
+        const normalized = [] as { inventoryItemId?: string; newItemName?: string; quantity: number; unit: string; unitCost: number }[];
         for (const line of lines) {
             const id = String(line?.inventoryItemId || '');
+            const newItemName = String(line?.newItemName || '').trim();
             const quantity = Number(line?.quantity);
             const unit = String(line?.unit || '');
             const unitCost = Number(line?.unitCost);
-            if (!mongoose.Types.ObjectId.isValid(id) || !INVENTORY_UNITS.includes(unit as any) || !Number.isFinite(quantity) || quantity <= 0 || quantity > 1_000_000 ||
+            const hasExistingItem = mongoose.Types.ObjectId.isValid(id);
+            if ((!hasExistingItem && (!newItemName || newItemName.length > 120)) || !INVENTORY_UNITS.includes(unit as any) || !Number.isFinite(quantity) || quantity <= 0 || quantity > 1_000_000 ||
                 !Number.isFinite(unitCost) || unitCost < 0 || unitCost > 10_000_000) {
-                return res.status(400).json({ error: 'Each line needs a valid inventory item, unit, quantity, and unit cost' });
+                return res.status(400).json({ error: 'Each line needs an existing or new inventory item, valid unit, quantity, and unit cost' });
             }
-            normalized.push({ inventoryItemId: id, quantity: rounded(quantity), unit, unitCost: rounded(unitCost) });
+            normalized.push({ ...(hasExistingItem ? { inventoryItemId: id } : { newItemName }), quantity: rounded(quantity), unit, unitCost: rounded(unitCost) });
         }
         const note = String(billReference || '').trim().slice(0, 80);
         const session = await mongoose.startSession();
         try {
             await session.withTransaction(async () => {
                 for (const line of normalized) {
+                    let inventoryItemId = line.inventoryItemId;
+                    if (!inventoryItemId && line.newItemName) {
+                        const existing = await InventoryItem.findOne({ restaurantId: req.user!.restaurantId, name: line.newItemName }).session(session);
+                        if (existing) {
+                            if (!existing.isActive) throw new Error(`“${line.newItemName}” already exists but is archived. Restore it before applying this bill.`);
+                            if (existing.unit !== line.unit) throw new Error(`“${line.newItemName}” already exists with unit ${existing.unit}. Choose that item or change its unit.`);
+                            inventoryItemId = existing.id;
+                        } else {
+                            const [created] = await InventoryItem.create([{
+                                restaurantId: req.user!.restaurantId,
+                                name: line.newItemName,
+                                category: 'General',
+                                unit: line.unit,
+                                currentStock: 0,
+                                reorderLevel: 0,
+                                costPerUnit: line.unitCost,
+                            }], { session });
+                            inventoryItemId = created.id;
+                        }
+                    }
+                    if (!inventoryItemId) throw new Error('Choose an existing item or provide a name for the new item.');
                     const before = await InventoryItem.findOneAndUpdate(
-                        { _id: line.inventoryItemId, restaurantId: req.user!.restaurantId, isActive: true, unit: line.unit },
+                        { _id: inventoryItemId, restaurantId: req.user!.restaurantId, isActive: true, unit: line.unit },
                         { $inc: { currentStock: line.quantity }, $set: { costPerUnit: line.unitCost } },
                         { session, runValidators: true },
                     );
