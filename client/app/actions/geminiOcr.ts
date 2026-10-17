@@ -35,6 +35,12 @@ async function extractOnApiServer(formData: FormData, task: 'inventory' | 'menu'
             body: JSON.stringify({ imageBase64, mimeType: file.type.toLowerCase() }),
             signal: AbortSignal.timeout(58_000),
         });
+        if (response.status === 413) {
+            return {
+                success: false,
+                error: 'The image upload exceeded a request-size limit. Please crop the image closer to the bill and retry.',
+            };
+        }
         const result = await response.json().catch(() => ({})) as GeminiResult;
         if (!response.ok) return { success: false, error: 'error' in result && result.error ? result.error : `The API server returned HTTP ${response.status} while reading the image.` };
         return result;
