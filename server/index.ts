@@ -15,6 +15,7 @@ import tableRoutes from './routes/tableRoutes';
 import analyticsRoutes from './routes/analyticsRoutes';
 import uploadRoutes from './routes/uploadRoutes';
 import inventoryRoutes from './routes/inventoryRoutes';
+import geminiOcrRoutes from './routes/geminiOcrRoutes';
 import { corsMiddleware } from './middleware/cors';
 import { requestLogger } from './middleware/requestLogger';
 import logger from './lib/logger';
@@ -88,6 +89,7 @@ async function startServer() {
     expressApp.use('/api/v1/analytics', analyticsRoutes);
     expressApp.use('/api/v1/upload', uploadRoutes);
     expressApp.use('/api/v1/inventory', inventoryRoutes);
+    expressApp.use('/api/v1/ocr', geminiOcrRoutes);
 
     expressApp.get('/api/health', (req, res) => {
         res.json({
@@ -126,4 +128,3 @@ startServer().catch((error) => {
     logger.error({ err: error }, 'Failed to start server');
     process.exit(1);
 });
-

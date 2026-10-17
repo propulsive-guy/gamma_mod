@@ -42,7 +42,8 @@ export function MenuPhotoImporter() {
             const formData = new FormData();
             formData.set('image', await prepareScanImage(photo));
             const result = await extractMenuPhoto(formData);
-            if (!result.success || !result.items) return toast.error(result.error || 'Gemini could not find menu items.');
+            if (!result.success) return toast.error(result.error || 'Gemini could not find menu items.');
+            if (!result.items?.length) return toast.error('Gemini could not find menu items.');
             setItems(result.items.map((item) => ({ ...item, selected: true })));
             toast.success(`Found ${result.items.length} menu items. Please review them.`);
         } catch (error) {

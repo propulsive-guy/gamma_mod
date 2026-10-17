@@ -44,3 +44,13 @@ export const authRateLimiter = rateLimit({
     },
     skipSuccessfulRequests: true,
 });
+
+/** Limit paid image-model calls while allowing normal bill/menu retries. */
+export const geminiOcrRateLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 10,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { error: 'Too many image scans. Please wait a minute and try again.' },
+    skipSuccessfulRequests: false,
+});

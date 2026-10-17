@@ -51,7 +51,8 @@ export function InventoryBillScanner({ items }: { items: InventoryItem[] }) {
             const formData = new FormData();
             formData.set('image', await prepareScanImage(photo));
             const result = await extractInventoryBill(formData);
-            if (!result.success || !result.lines) return toast.error(result.error || 'Gemini could not find inventory rows.');
+            if (!result.success) return toast.error(result.error || 'Gemini could not find inventory rows.');
+            if (!result.lines?.length) return toast.error('Gemini could not find inventory rows.');
             setRows(result.lines.map((row) => {
                 const match = items.find((item) => normalizedName(item.name) === normalizedName(row.name));
                 return {
