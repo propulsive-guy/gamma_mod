@@ -14,21 +14,6 @@ const units = ['kg', 'g', 'l', 'ml', 'piece', 'pack', 'box', 'bottle', 'can'];
 const newId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const normalizedName = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-async function prepareGeminiImage(file: File): Promise<Blob> {
-    if (typeof createImageBitmap !== 'function') return file;
-    const bitmap = await createImageBitmap(file);
-    try {
-        const scale = Math.min(1, 1800 / Math.max(bitmap.width, bitmap.height));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-        const context = canvas.getContext('2d');
-        if (!context) return file;
-        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-        return await new Promise((resolve) => canvas.toBlob((blob) => resolve(blob || file), 'image/jpeg', 0.82));
-    } finally { bitmap.close(); }
-}
-
 export function InventoryBillScanner({ items }: { items: InventoryItem[] }) {
     const router = useRouter();
     const inputRef = useRef<HTMLInputElement>(null);
@@ -54,9 +39,8 @@ export function InventoryBillScanner({ items }: { items: InventoryItem[] }) {
         if (!photo || scanning) return;
         setScanning(true);
         try {
-            const image = await prepareGeminiImage(photo);
             const formData = new FormData();
-            formData.set('image', new File([image], photo.name.replace(/\.[^.]+$/, '.jpg'), { type: image.type || 'image/jpeg' }));
+            formData.set('image', photo);
             const result = await extractInventoryBill(formData);
             if (!result.success || !result.lines) return toast.error(result.error || 'Gemini could not find inventory rows.');
             setRows(result.lines.map((row) => {
@@ -107,6 +91,7 @@ export function InventoryBillScanner({ items }: { items: InventoryItem[] }) {
                 <label className="text-[11px] font-semibold text-slate-500">Quantity<input type="number" min="0.0001" step="0.0001" value={row.quantity} onChange={(event) => updateRow(row.id, { quantity: Number(event.target.value) })} className={`${inputClass} mt-1`} /></label>
                 <label className="text-[11px] font-semibold text-slate-500">Cost / unit (₹)<input type="number" min="0" step="0.01" value={row.unitCost} onChange={(event) => updateRow(row.id, { unitCost: Number(event.target.value) })} className={`${inputClass} mt-1`} /></label>
                 <button type="button" onClick={() => setRows((current) => current.filter((item) => item.id !== row.id))} aria-label="Remove bill line" className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"><TrashIcon className="h-5 w-5" /></button>
+                {((row.quantity <= 0 || row.unitCost < 0) && <p className="text-xs font-medium text-amber-700 sm:col-span-5">Quantity or unit cost could not be read clearly. Enter it before confirming.</p>)}
                 {row.inventoryItemId && row.unit !== selectedItem(row)?.unit && <p className="text-xs font-medium text-amber-700 sm:col-span-5">Bill unit ({row.unit}) differs from inventory unit ({selectedItem(row)?.unit}). Convert the quantity before applying.</p>}
             </div>)}</div>
             <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><button type="button" onClick={() => setRows([])} className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-600">Clear</button><button type="button" disabled={saving || rows.some(invalidRow)} onClick={apply} className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-600 px-5 py-3 text-sm font-bold text-white disabled:opacity-50"><CheckCircleIcon className="h-5 w-5" />{saving ? 'Updating stock…' : `Confirm ${rows.length} stock updates`}</button></div>

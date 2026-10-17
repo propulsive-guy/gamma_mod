@@ -75,10 +75,10 @@ function validateInventoryLines(value: unknown): InventoryLine[] {
     if (!Array.isArray(value)) return [];
     return value.slice(0, 40).flatMap((line: any) => {
         const name = typeof line?.name === 'string' ? line.name.trim().slice(0, 120) : '';
-        const quantity = Number(line?.quantity);
-        const unitCost = Number(line?.unitCost);
+        const quantity = line?.quantity === null || line?.quantity === undefined ? 0 : Number(line.quantity);
+        const unitCost = line?.unitCost === null || line?.unitCost === undefined ? -1 : Number(line.unitCost);
         const unit = typeof line?.unit === 'string' && INVENTORY_UNITS.has(line.unit.toLowerCase()) ? line.unit.toLowerCase() : '';
-        if (!name || !Number.isFinite(quantity) || quantity <= 0 || quantity > 100000 || !Number.isFinite(unitCost) || unitCost < 0 || unitCost > 10000000) return [];
+        if (!name || !Number.isFinite(quantity) || quantity < 0 || quantity > 100000 || !Number.isFinite(unitCost) || unitCost < -1 || unitCost > 10000000) return [];
         return [{ name, quantity, unit, unitCost, sourceText: typeof line?.sourceText === 'string' ? line.sourceText.trim().slice(0, 240) : name }];
     });
 }
@@ -113,51 +113,67 @@ async function extractWithGemini(formData: FormData, task: GeminiTask) {
     }
 
     const instructions = task === 'inventory'
-        ? 'Read this supplier purchase bill and extract only purchased inventory line items. Ignore totals, taxes, discounts, invoice metadata and payment details. Return each line name, purchased quantity, unit (normalize to kg, g, l, ml, piece, pack, box, bottle, or can; use empty string if not clear), cost per unit (not line total), and a short sourceText from the bill. Do not invent unclear values; skip rows that do not clearly identify an item and quantity.'
-        : 'Read this restaurant menu and extract only food and drink menu items. Ignore headings without items, contact details, promotions, and tax notes. Return each item name, short description if visible (otherwise empty string), listed price as a number, and category based on the nearest printed section heading (or Other). Do not invent prices; skip rows without a clear item name and price.';
+        ? 'Extract purchased product rows from this supplier bill, including photographed, rotated, handwritten, or non-standard table layouts. Ignore totals, tax, discounts, and invoice metadata. Return a best-effort entry for every plausible product row. Normalize unit to kg, g, l, ml, piece, pack, box, bottle, or can; use empty string if uncertain. Return cost per unit; when only a line total is visible, divide it by quantity. Do not guess unreadable numbers: use 0 for unreadable quantity and -1 for unreadable unit cost so the user can fill them in. Preserve a short snippet in sourceText.'
+        : 'Extract food and drink items from this restaurant menu, including rotated or non-standard layouts. Ignore headings without items, contact details, promotions, and tax notes. Return a best-effort entry for each plausible item. Use an empty description if none is printed and category Other if the section is unclear. Do not invent a price; use 0 if it is unreadable so the user can review it.';
     const schema = task === 'inventory' ? inventorySchema : menuSchema;
 
     try {
-        const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-            body: JSON.stringify({
-                contents: [{
-                    role: 'user',
-                    parts: [
-                        { text: instructions },
-                        { inline_data: { mime_type: file.type.toLowerCase(), data: toBase64(new Uint8Array(await file.arrayBuffer())) } },
-                    ],
-                }],
-                generationConfig: { responseMimeType: 'application/json', responseSchema: schema, temperature: 0 },
-            }),
-        });
+        const imageData = toBase64(new Uint8Array(await file.arrayBuffer()));
+        const requestExtraction = async (prompt: string) => {
+            const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+                body: JSON.stringify({
+                    contents: [{
+                        role: 'user',
+                        parts: [
+                            { text: prompt },
+                            { inline_data: { mime_type: file.type.toLowerCase(), data: imageData } },
+                        ],
+                    }],
+                    generationConfig: { responseMimeType: 'application/json', responseSchema: schema, temperature: 0, maxOutputTokens: 8192 },
+                }),
+                signal: AbortSignal.timeout(45_000),
+            });
+            if (!response.ok) {
+                console.error('Gemini image extraction failed with status:', response.status);
+                const error = response.status === 401 || response.status === 403
+                    ? 'Gemini rejected the API key. Check the Gemini_bitbyte secret and that the key has Gemini API access.'
+                    : response.status === 429
+                        ? 'Gemini quota or rate limit reached. Check the API quota or try again later.'
+                        : response.status === 400
+                            ? 'Gemini rejected this image or request. Try a JPG or PNG photo; if that fails, check the Gemini API configuration.'
+                            : response.status === 404
+                                ? 'The configured Gemini model is unavailable for this API key.'
+                                : `Gemini service error (${response.status}). Please try again shortly.`;
+                return { error } as const;
+            }
+            const payload = await response.json();
+            const text = payload?.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text || '').join('');
+            if (typeof text !== 'string' || !text.trim()) {
+                const reason = payload?.candidates?.[0]?.finishReason || payload?.promptFeedback?.blockReason;
+                return { error: reason ? `Gemini could not process this image (${reason}).` : 'Gemini returned no readable result for this image.' } as const;
+            }
+            try { return { data: JSON.parse(text) as unknown } as const; }
+            catch { return { error: 'Gemini returned an incomplete response. Try scanning the image again.' } as const; }
+        };
 
-        if (!response.ok) {
-            console.error('Gemini image extraction failed with status:', response.status);
-            return { success: false as const, error: response.status === 429 ? 'Gemini is busy. Please try again shortly.' : 'Gemini could not read this image. Try a clearer photo.' };
-        }
-        const payload = await response.json();
-        const text = payload?.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text || '').join('');
-        if (typeof text !== 'string' || !text.trim()) return { success: false as const, error: 'Gemini did not find readable rows in this image.' };
+        let extraction = await requestExtraction(instructions);
+        if ('error' in extraction) return { success: false as const, error: extraction.error };
 
-        let parsed: unknown;
-        try { parsed = JSON.parse(text); }
-        catch {
-            console.error('Gemini returned invalid structured JSON');
-            return { success: false as const, error: 'Gemini returned unreadable results. Please try again.' };
+        const getRows = (data: unknown) => task === 'inventory'
+            ? validateInventoryLines((data as { lines?: unknown })?.lines)
+            : validateMenuItems((data as { items?: unknown })?.items);
+        let rows = getRows(extraction.data);
+        if (!rows.length) {
+            extraction = await requestExtraction(`${instructions} This is a second-pass extraction. Look closely for text in table columns, faint print, and rows that wrap across lines. Return the required JSON arrays even if some individual numeric fields are uncertain; use the instructed sentinel values for unreadable fields.`);
+            if ('error' in extraction) return { success: false as const, error: extraction.error };
+            rows = getRows(extraction.data);
         }
-
-        if (task === 'inventory') {
-            const lines = validateInventoryLines((parsed as { lines?: unknown })?.lines);
-            return lines.length
-                ? { success: true as const, lines }
-                : { success: false as const, error: 'No clear inventory item rows were found. Try a straighter, brighter photo.' };
-        }
-        const items = validateMenuItems((parsed as { items?: unknown })?.items);
-        return items.length
-            ? { success: true as const, items }
-            : { success: false as const, error: 'No clear menu item and price rows were found. Try a straighter, brighter photo.' };
+        if (!rows.length) return { success: false as const, error: 'No bill or menu line items were recognized. Try a closer photo of the printed rows, or add the rows manually.' };
+        return task === 'inventory'
+            ? { success: true as const, lines: rows as InventoryLine[] }
+            : { success: true as const, items: rows as MenuLine[] };
     } catch (error) {
         console.error('Gemini image extraction request failed:', error);
         return { success: false as const, error: 'Could not contact Gemini. Check the server configuration and try again.' };
