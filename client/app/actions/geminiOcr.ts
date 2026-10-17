@@ -8,6 +8,8 @@ type MenuLine = { name: string; description: string; price: number; category: st
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const GEMINI_REQUEST_TIMEOUT_MS = 24_000;
+const GEMINI_MODEL = 'gemini-3.8-flash';
+const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
 const INVENTORY_UNITS = new Set(['kg', 'g', 'l', 'ml', 'piece', 'pack', 'box', 'bottle', 'can', '']);
 
@@ -27,18 +29,18 @@ function toBase64(bytes: Uint8Array) {
 }
 
 const inventorySchema = {
-    type: 'OBJECT',
+    type: 'object',
     properties: {
         lines: {
-            type: 'ARRAY',
+            type: 'array',
             items: {
-                type: 'OBJECT',
+                type: 'object',
                 properties: {
-                    name: { type: 'STRING' },
-                    quantity: { type: 'NUMBER' },
-                    unit: { type: 'STRING', enum: ['kg', 'g', 'l', 'ml', 'piece', 'pack', 'box', 'bottle', 'can', ''] },
-                    unitCost: { type: 'NUMBER' },
-                    sourceText: { type: 'STRING' },
+                    name: { type: 'string' },
+                    quantity: { type: 'number' },
+                    unit: { type: 'string', enum: ['kg', 'g', 'l', 'ml', 'piece', 'pack', 'box', 'bottle', 'can', ''] },
+                    unitCost: { type: 'number' },
+                    sourceText: { type: 'string' },
                 },
                 required: ['name', 'quantity', 'unit', 'unitCost', 'sourceText'],
             },
@@ -48,17 +50,17 @@ const inventorySchema = {
 };
 
 const menuSchema = {
-    type: 'OBJECT',
+    type: 'object',
     properties: {
         items: {
-            type: 'ARRAY',
+            type: 'array',
             items: {
-                type: 'OBJECT',
+                type: 'object',
                 properties: {
-                    name: { type: 'STRING' },
-                    description: { type: 'STRING' },
-                    price: { type: 'NUMBER' },
-                    category: { type: 'STRING' },
+                    name: { type: 'string' },
+                    description: { type: 'string' },
+                    price: { type: 'number' },
+                    category: { type: 'string' },
                 },
                 required: ['name', 'description', 'price', 'category'],
             },
@@ -92,31 +94,31 @@ function validateMenuItems(value: unknown): MenuLine[] {
 }
 
 async function extractWithGemini(formData: FormData, task: GeminiTask) {
-    const session = await auth();
-    if (!session?.user?.restaurantId) return { success: false as const, error: 'Please sign in again.' };
-
-    const apiKey = getGeminiApiKey();
-    if (!apiKey) {
-        console.error('Gemini OCR is not configured: Gemini_bitbyte is missing');
-        return { success: false as const, error: 'Image reading is not configured. Add the Gemini_bitbyte server secret.' };
-    }
-    const file = formData.get('image');
-    if (!(file instanceof File) || !ALLOWED_IMAGE_TYPES.has(file.type.toLowerCase())) {
-        return { success: false as const, error: 'Choose a JPG, PNG, WebP, or HEIC image.' };
-    }
-    if (file.size < 1 || file.size > MAX_IMAGE_BYTES) {
-        return { success: false as const, error: 'Image must be smaller than 9MB.' };
-    }
-
-    const instructions = task === 'inventory'
-        ? 'Extract purchased product rows from this supplier bill, including photographed, rotated, handwritten, or non-standard table layouts. Ignore totals, tax, discounts, and invoice metadata. Return a best-effort entry for every plausible product row. Normalize unit to kg, g, l, ml, piece, pack, box, bottle, or can; use empty string if uncertain. Return cost per unit; when only a line total is visible, divide it by quantity. Do not guess unreadable numbers: use 0 for unreadable quantity and -1 for unreadable unit cost so the user can fill them in. Preserve a short snippet in sourceText.'
-        : 'Extract food and drink items from this restaurant menu, including rotated or non-standard layouts. Ignore headings without items, contact details, promotions, and tax notes. Return a best-effort entry for each plausible item. Use an empty description if none is printed and category Other if the section is unclear. Do not invent a price; use 0 if it is unreadable so the user can review it.';
-    const schema = task === 'inventory' ? inventorySchema : menuSchema;
-
     try {
+        const session = await auth();
+        if (!session?.user?.restaurantId) return { success: false as const, error: 'Please sign in again.' };
+
+        const apiKey = getGeminiApiKey();
+        if (!apiKey) {
+            console.error('Gemini OCR is not configured: Gemini_bitbyte is missing from the Vercel runtime');
+            return { success: false as const, error: 'Gemini is not configured on Vercel. Add Gemini_bitbyte to the Production environment variables and redeploy.' };
+        }
+        const file = formData.get('image');
+        if (!(file instanceof File) || !ALLOWED_IMAGE_TYPES.has(file.type.toLowerCase())) {
+            return { success: false as const, error: 'Choose a JPG, PNG, WebP, or HEIC image.' };
+        }
+        if (file.size < 1 || file.size > MAX_IMAGE_BYTES) {
+            return { success: false as const, error: 'The prepared image exceeds Vercel’s 4 MB upload limit. Please choose the photo again and retry.' };
+        }
+
+        const instructions = task === 'inventory'
+            ? 'Extract purchased product rows from this supplier bill, including photographed, rotated, handwritten, or non-standard table layouts. Ignore totals, tax, discounts, and invoice metadata. Return a best-effort entry for every plausible product row. Normalize unit to kg, g, l, ml, piece, pack, box, bottle, or can; use empty string if uncertain. Return cost per unit; when only a line total is visible, divide it by quantity. Do not guess unreadable numbers: use 0 for unreadable quantity and -1 for unreadable unit cost so the user can fill them in. Preserve a short snippet in sourceText.'
+            : 'Extract food and drink items from this restaurant menu, including rotated or non-standard layouts. Ignore headings without items, contact details, promotions, and tax notes. Return a best-effort entry for each plausible item. Use an empty description if none is printed and category Other if the section is unclear. Do not invent a price; use 0 if it is unreadable so the user can review it.';
+        const schema = task === 'inventory' ? inventorySchema : menuSchema;
+
         const imageData = toBase64(new Uint8Array(await file.arrayBuffer()));
         const requestExtraction = async (prompt: string) => {
-            const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
+            const response = await fetch(GEMINI_ENDPOINT, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
                 body: JSON.stringify({
@@ -127,33 +129,63 @@ async function extractWithGemini(formData: FormData, task: GeminiTask) {
                             { inline_data: { mime_type: file.type.toLowerCase(), data: imageData } },
                         ],
                     }],
-                    generationConfig: { responseMimeType: 'application/json', responseSchema: schema, temperature: 0, maxOutputTokens: 8192 },
+                    generationConfig: {
+                        responseFormat: { text: { mimeType: 'application/json', schema } },
+                        thinkingConfig: { thinkingLevel: 'low' },
+                        maxOutputTokens: 8192,
+                    },
                 }),
                 // Keep room under the route's 60s Vercel function duration for
                 // the optional second extraction pass and auth/database work.
                 signal: AbortSignal.timeout(GEMINI_REQUEST_TIMEOUT_MS),
             });
             if (!response.ok) {
-                console.error('Gemini image extraction failed with status:', response.status);
+                let apiMessage = '';
+                try {
+                    const errorPayload = await response.json();
+                    apiMessage = typeof errorPayload?.error?.message === 'string' ? errorPayload.error.message : '';
+                } catch {
+                    // Keep the HTTP status if Google's error response isn't JSON.
+                }
+                console.error('Gemini image extraction API error:', {
+                    status: response.status,
+                    model: GEMINI_MODEL,
+                    mimeType: file.type,
+                    imageBytes: file.size,
+                    message: apiMessage.slice(0, 500),
+                });
+                const detail = apiMessage ? ` ${apiMessage.slice(0, 220)}` : '';
                 const error = response.status === 401 || response.status === 403
-                    ? 'Gemini rejected the API key. Check the Gemini_bitbyte secret and that the key has Gemini API access.'
+                    ? `Gemini denied this API key or model access (${response.status}). Confirm Gemini_bitbyte is a valid Gemini API key in Vercel.${detail}`
                     : response.status === 429
-                        ? 'Gemini quota or rate limit reached. Check the API quota or try again later.'
+                        ? `Gemini quota or rate limit reached (429). Check the API quota or try again later.${detail}`
                         : response.status === 400
-                            ? 'Gemini rejected this image or request. Try a JPG or PNG photo; if that fails, check the Gemini API configuration.'
+                            ? `Gemini rejected the request (400).${detail}`
                             : response.status === 404
-                                ? 'The configured Gemini model is unavailable for this API key.'
-                                : `Gemini service error (${response.status}). Please try again shortly.`;
+                                ? `Gemini model ${GEMINI_MODEL} was not found or is unavailable to this key.${detail}`
+                                : `Gemini returned HTTP ${response.status}.${detail}`;
                 return { error } as const;
             }
             const payload = await response.json();
-            const text = payload?.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text || '').join('');
+            const candidate = payload?.candidates?.[0];
+            const parts = candidate?.content?.parts;
+            // Gemini 3 may include separate internal-thought parts; parse only
+            // the user-facing response text so it remains valid JSON.
+            const text = Array.isArray(parts)
+                ? parts.filter((part: { thought?: boolean }) => part?.thought !== true).map((part: { text?: string }) => part.text || '').join('').trim()
+                : '';
             if (typeof text !== 'string' || !text.trim()) {
-                const reason = payload?.candidates?.[0]?.finishReason || payload?.promptFeedback?.blockReason;
+                const reason = candidate?.finishReason || payload?.promptFeedback?.blockReason;
                 return { error: reason ? `Gemini could not process this image (${reason}).` : 'Gemini returned no readable result for this image.' } as const;
             }
-            try { return { data: JSON.parse(text) as unknown } as const; }
-            catch { return { error: 'Gemini returned an incomplete response. Try scanning the image again.' } as const; }
+            try {
+                const jsonText = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+                return { data: JSON.parse(jsonText) as unknown } as const;
+            } catch {
+                const reason = candidate?.finishReason;
+                const suffix = reason ? ` (${reason})` : '';
+                return { error: `Gemini returned an incomplete or invalid JSON response${suffix}. Try scanning again.` } as const;
+            }
         };
 
         let extraction = await requestExtraction(instructions);
@@ -176,9 +208,12 @@ async function extractWithGemini(formData: FormData, task: GeminiTask) {
         const name = error instanceof Error ? error.name : 'UnknownError';
         console.error('Gemini image extraction request failed:', { name, message: error instanceof Error ? error.message : String(error) });
         if (name === 'TimeoutError' || name === 'AbortError') {
-            return { success: false as const, error: 'Gemini took too long to read this bill. Please try again.' };
+            return { success: false as const, error: 'Gemini timed out while reading the image. Try again; if it repeats, check the Vercel function duration and logs.' };
         }
-        return { success: false as const, error: 'The image reached the app, but Gemini could not complete the scan. Check the Vercel Function logs for the underlying error.' };
+        if (error instanceof TypeError && /fetch|network/i.test(error.message)) {
+            return { success: false as const, error: 'Vercel could not reach the Gemini API. Check the Vercel Function logs and retry.' };
+        }
+        return { success: false as const, error: 'The scan failed inside the Vercel server action. Check the Vercel Function logs for the request error.' };
     }
 }
 
