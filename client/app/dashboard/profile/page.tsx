@@ -19,7 +19,7 @@ export default async function ProfilePage() {
     }
 
     return (
-        <div className="max-w-3xl mx-auto space-y-6">
+        <div className="mx-auto w-full max-w-3xl min-w-0 space-y-5 sm:space-y-6">
             {/* Header */}
             <div>
                 <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
@@ -34,4 +34,3 @@ export default async function ProfilePage() {
         </div>
     );
 }
-

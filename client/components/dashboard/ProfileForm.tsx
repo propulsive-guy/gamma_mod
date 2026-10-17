@@ -120,35 +120,42 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
         setQrDecodeResult({ status: 'idle' });
 
         try {
-            // Check if BarcodeDetector is available (Chrome 83+, Edge 83+)
-            if (!('BarcodeDetector' in window)) {
-                toast.error('QR scanning is not supported in this browser. Please use Chrome or Edge.');
-                setQrDecodeResult({ status: 'error', message: 'Browser not supported. Use Chrome or Edge.' });
-                return;
-            }
-
-            // Load the image
+            if (!file.type.startsWith('image/')) throw new Error('Choose an image file');
+            if (file.size > 12 * 1024 * 1024) throw new Error('Choose an image under 12MB');
             const img = new Image();
             const imageUrl = URL.createObjectURL(file);
+            let rawValue = '';
+            try {
+                await new Promise<void>((resolve, reject) => {
+                    img.onload = () => resolve();
+                    img.onerror = () => reject(new Error('Could not open that image. Try a JPG or PNG photo.'));
+                    img.src = imageUrl;
+                });
+                if ('BarcodeDetector' in window) {
+                    const detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
+                    const barcodes = await detector.detect(img);
+                    rawValue = barcodes?.[0]?.rawValue || '';
+                }
+                if (!rawValue) {
+                    const { default: jsQR } = await import('jsqr');
+                    const canvas = document.createElement('canvas');
+                    const scale = Math.min(1, 1800 / Math.max(img.naturalWidth, img.naturalHeight));
+                    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+                    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+                    const context = canvas.getContext('2d', { willReadFrequently: true });
+                    if (!context) throw new Error('Could not process that image. Try another photo.');
+                    context.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    rawValue = jsQR(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height)?.data || '';
+                }
+            } finally {
+                URL.revokeObjectURL(imageUrl);
+            }
 
-            await new Promise<void>((resolve, reject) => {
-                img.onload = () => resolve();
-                img.onerror = () => reject(new Error('Failed to load image'));
-                img.src = imageUrl;
-            });
-
-            // Decode QR code using BarcodeDetector
-            const detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
-            const barcodes = await detector.detect(img);
-            URL.revokeObjectURL(imageUrl);
-
-            if (!barcodes || barcodes.length === 0) {
+            if (!rawValue) {
                 toast.error('No QR code found in the image');
                 setQrDecodeResult({ status: 'error', message: 'No QR code detected. Try a clearer photo.' });
                 return;
             }
-
-            const rawValue: string = barcodes[0].rawValue;
 
             // Validate it's a UPI URI
             if (!rawValue.toLowerCase().startsWith('upi://pay')) {
@@ -162,8 +169,8 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
             const queryString = rawValue.split('?')[1] || '';
             const params = new URLSearchParams(queryString);
 
-            const extractedPa = decodeURIComponent(params.get('pa') || '');
-            const extractedPn = decodeURIComponent(params.get('pn') || '');
+            const extractedPa = params.get('pa') || '';
+            const extractedPn = params.get('pn') || '';
             const extractedMc = params.get('mc') || '';
             const extractedAid = params.get('aid') || '';
 
@@ -178,8 +185,9 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
             setQrDecodeResult({ status: 'success', message: successMsg });
         } catch (error) {
             console.error('QR decode error:', error);
-            toast.error('Failed to decode QR. Try a clearer image or enter details manually.');
-            setQrDecodeResult({ status: 'error', message: 'Decode failed. Enter details manually below.' });
+            const message = error instanceof Error ? error.message : 'Failed to decode QR. Try a clearer image.';
+            toast.error(message);
+            setQrDecodeResult({ status: 'error', message });
         } finally {
             setIsDecodingQr(false);
             // Reset file input so the same file can be re-uploaded
@@ -277,7 +285,7 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
         <form onSubmit={handleSubmit} className="space-y-6">
             {/* ── Section 1: Basic Info ── */}
             <div className="bg-white rounded-2xl border border-slate-200/60 overflow-hidden">
-                <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
+                <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-6">
                     <div className="p-2 rounded-lg bg-blue-50">
                         <BuildingStorefrontIcon className="w-4 h-4 text-blue-600" />
                     </div>
@@ -286,7 +294,7 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
                         <p className="text-xs text-slate-500">Your restaurant name and branding</p>
                     </div>
                 </div>
-                <div className="p-6 space-y-5">
+                <div className="space-y-5 p-4 sm:p-6">
                     {/* Name */}
                     <div>
                         <label htmlFor="name" className={labelClass}>Restaurant Name</label>
@@ -322,7 +330,7 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
                     {/* Logo */}
                     <div>
                         <label className={labelClass}>Restaurant Logo</label>
-                        <div className="flex items-start gap-5">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:gap-5">
                             <div className="flex-shrink-0">
                                 {logoPreview ? (
                                     <div className="w-20 h-20 rounded-2xl overflow-hidden bg-slate-50 border border-slate-200 shadow-sm relative group">
@@ -361,7 +369,7 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
 
             {/* ── Section 2: Payment Settings ── */}
             <div className="bg-white rounded-2xl border border-slate-200/60 overflow-hidden">
-                <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
+                <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-6">
                     <div className="p-2 rounded-lg bg-emerald-50">
                         <CreditCardIcon className="w-4 h-4 text-emerald-600" />
                     </div>
@@ -370,12 +378,12 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
                         <p className="text-xs text-slate-500">Configure UPI payment parameters</p>
                     </div>
                 </div>
-                <div className="p-6 space-y-5">
+                <div className="space-y-5 p-4 sm:p-6">
                     {/* QR Upload Section */}
                     <div className="relative">
                         <label
                             htmlFor="qrUpload"
-                            className={`flex flex-col items-center justify-center w-full py-6 px-4 border-2 rounded-2xl cursor-pointer transition-all duration-200 ${
+                            className={`flex min-h-36 flex-col items-center justify-center w-full py-6 px-4 border-2 rounded-2xl text-center cursor-pointer transition-all duration-200 ${
                                 qrDecodeResult.status === 'success'
                                     ? 'border-emerald-300 bg-emerald-50/50'
                                     : qrDecodeResult.status === 'error'
@@ -420,7 +428,6 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
                                 type="file"
                                 id="qrUpload"
                                 accept="image/*"
-                                capture="environment"
                                 className="hidden"
                                 onChange={handleQrUpload}
                             />
@@ -492,7 +499,7 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
 
             {/* ── Section 3: Theme Customization ── */}
             <div className="bg-white rounded-2xl border border-slate-200/60 overflow-hidden">
-                <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
+                <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-6">
                     <div className="p-2 rounded-lg bg-violet-50">
                         <PaintBrushIcon className="w-4 h-4 text-violet-600" />
                     </div>
@@ -501,7 +508,7 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
                         <p className="text-xs text-slate-500">Customize your customer-facing pages</p>
                     </div>
                 </div>
-                <div className="p-6 space-y-6">
+                <div className="space-y-6 p-4 sm:p-6">
                     {/* Color Scheme */}
                     <div>
                         <label className={labelClass}>Color Scheme</label>
@@ -591,7 +598,7 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
 
             {/* ── Section 4: Tax Configuration ── */}
             <div className="bg-white rounded-2xl border border-slate-200/60 overflow-hidden">
-                <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
+                <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-6">
                     <div className="p-2 rounded-lg bg-amber-50">
                         <ReceiptPercentIcon className="w-4 h-4 text-amber-600" />
                     </div>
@@ -600,7 +607,7 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
                         <p className="text-xs text-slate-500">GST and tax settings for invoices</p>
                     </div>
                 </div>
-                <div className="p-6 space-y-5">
+                <div className="space-y-5 p-4 sm:p-6">
                     <div>
                         <label htmlFor="gstNumber" className={labelClass}>GST Number</label>
                         <input
@@ -617,7 +624,7 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
                         <label htmlFor="fssaiNumber" className={labelClass}>FSSAI Number</label>
                         <input type="text" name="fssaiNumber" id="fssaiNumber" inputMode="numeric" maxLength={30} value={fssaiNumber} onChange={(e) => setFssaiNumber(e.target.value)} className={inputClass} placeholder="Enter FSSAI number" />
                     </div>
-                    <div className="grid grid-cols-2 gap-5">
+                    <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
                         <div>
                             <label htmlFor="gstPercentage" className={labelClass}>CGST/IGST (%)</label>
                             <div className="relative">
@@ -657,14 +664,14 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
             </div>
 
             <div className="overflow-hidden rounded-2xl border border-slate-200/60 bg-white">
-                <div className="flex items-center gap-3 border-b border-slate-100 px-6 py-4">
+                <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-6">
                     <div className="rounded-lg bg-violet-50 p-2"><ShoppingBagIcon className="h-4 w-4 text-violet-600" /></div>
                     <div>
                         <h2 className="text-sm font-semibold text-slate-900">Takeaway packaging</h2>
                         <p className="text-xs text-slate-500">A fixed charge added once per takeaway order at payment</p>
                     </div>
                 </div>
-                <div className="p-6">
+                <div className="p-4 sm:p-6">
                     <label htmlFor="packagingCharge" className={labelClass}>Packaging charge (₹)</label>
                     <input id="packagingCharge" name="packagingCharge" type="number" inputMode="decimal" min="0" max="10000" step="0.01" value={packagingCharge} onChange={(event) => setPackagingCharge(event.target.value)} className={inputClass} placeholder="0.00" required />
                     <p className={hintClass}>Set to ₹0 for no charge. This does not affect dine-in orders.</p>
@@ -673,7 +680,7 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
 
             {/* ── Aesthetic Downloads Settings ── */}
             <div className="bg-white rounded-2xl border border-slate-200/60 overflow-hidden">
-                <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
+                <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-6">
                     <div className="p-2 rounded-lg bg-pink-50">
                         <CameraIcon className="w-4 h-4 text-pink-600" />
                     </div>
@@ -682,7 +689,7 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
                         <p className="text-xs text-slate-500">Allow customers to download high-quality aesthetic photos of your cafe and menu items</p>
                     </div>
                 </div>
-                <div className="p-6 space-y-6">
+                <div className="space-y-6 p-4 sm:p-6">
                     {/* Toggle Switch */}
                     <div className="flex items-center justify-between p-4 rounded-xl bg-slate-50 border border-slate-100 hover:border-slate-200 transition-all">
                         <div className="space-y-0.5">
@@ -709,7 +716,7 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
                             {/* Cafe Aesthetic Photo Upload */}
                             <div>
                                 <label className={labelClass}>Cafe Aesthetic Image (Instagram-ready)</label>
-                                <div className="flex items-start gap-5">
+                                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:gap-5">
                                     <div className="flex-shrink-0">
                                         {coverPreview ? (
                                             <div className="w-24 h-24 rounded-2xl overflow-hidden bg-slate-50 border border-slate-200 shadow-sm relative group">

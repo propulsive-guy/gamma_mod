@@ -5,15 +5,16 @@ import { useRouter } from 'next/navigation';
 import { CameraIcon, CheckCircleIcon, PlusIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { toast } from 'react-hot-toast';
 import { applyInventoryBillPurchase } from '@/app/actions/inventory';
-import { parseInventoryBillText, type ParsedBillLine } from '@/lib/inventoryBillOcr';
+import { extractInventoryBill } from '@/app/actions/geminiOcr';
 
 type InventoryItem = { _id: string; name: string; unit: string; currentStock: number; costPerUnit: number };
+type ParsedBillLine = { name: string; quantity: number; unit: string; unitCost: number; sourceText: string };
 type ReviewLine = ParsedBillLine & { id: string; inventoryItemId: string };
 const units = ['kg', 'g', 'l', 'ml', 'piece', 'pack', 'box', 'bottle', 'can'];
 const newId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const normalizedName = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-async function prepareOcrImage(file: File): Promise<Blob> {
+async function prepareGeminiImage(file: File): Promise<Blob> {
     if (typeof createImageBitmap !== 'function') return file;
     const bitmap = await createImageBitmap(file);
     try {
@@ -36,7 +37,6 @@ export function InventoryBillScanner({ items }: { items: InventoryItem[] }) {
     const [rows, setRows] = useState<ReviewLine[]>([]);
     const [reference, setReference] = useState('');
     const [scanning, setScanning] = useState(false);
-    const [progress, setProgress] = useState(0);
     const [saving, setSaving] = useState(false);
 
     useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
@@ -54,25 +54,20 @@ export function InventoryBillScanner({ items }: { items: InventoryItem[] }) {
         if (!photo || scanning) return;
         setScanning(true);
         try {
-            const { createWorker } = await import('tesseract.js');
-            const image = await prepareOcrImage(photo);
-            const worker = await createWorker('eng', 1, {
-                logger: (message) => { if (message.status === 'recognizing text') setProgress(Math.round((message.progress || 0) * 100)); },
-            });
-            let text = '';
-            try { text = (await worker.recognize(image)).data.text; }
-            finally { await worker.terminate(); }
-            const parsed = parseInventoryBillText(text);
-            if (!parsed.length) return toast.error('No item rows found. Use a clear, straight photo or add rows manually.');
-            setRows(parsed.map((row) => {
+            const image = await prepareGeminiImage(photo);
+            const formData = new FormData();
+            formData.set('image', new File([image], photo.name.replace(/\.[^.]+$/, '.jpg'), { type: image.type || 'image/jpeg' }));
+            const result = await extractInventoryBill(formData);
+            if (!result.success || !result.lines) return toast.error(result.error || 'Gemini could not find inventory rows.');
+            setRows(result.lines.map((row) => {
                 const match = items.find((item) => normalizedName(item.name) === normalizedName(row.name));
                 return { ...row, id: newId(), inventoryItemId: match?._id || '' };
             }));
-            toast.success(`Found ${parsed.length} lines. Review each line before updating stock.`);
+            toast.success(`Found ${result.lines.length} lines. Review each line before updating stock.`);
         } catch (error) {
-            console.error('Inventory bill OCR error:', error);
+            console.error('Gemini inventory image reading error:', error);
             toast.error('Could not read this photo. Try a brighter, sharper image.');
-        } finally { setScanning(false); setProgress(0); }
+        } finally { setScanning(false); }
     };
 
     const updateRow = (id: string, patch: Partial<ReviewLine>) => setRows((current) => current.map((row) => row.id === id ? { ...row, ...patch } : row));
@@ -99,10 +94,10 @@ export function InventoryBillScanner({ items }: { items: InventoryItem[] }) {
     const inputClass = 'h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800';
     return <section className="overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-sm">
         <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
-            <div><h2 className="font-bold text-slate-900">Update stock from a bill</h2><p className="mt-1 text-sm text-slate-600">Scan with your phone. OCR runs on this device; stock changes only after you review and confirm.</p></div>
-            <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-sky-600 px-4 py-3 text-sm font-bold text-white hover:bg-sky-700"><CameraIcon className="h-5 w-5" />{photo ? 'Choose another bill' : 'Take or upload bill'}<input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="sr-only" onChange={(event) => selectPhoto(event.target.files?.[0])} /></label>
+            <div><h2 className="font-bold text-slate-900">Update stock from a bill</h2><p className="mt-1 text-sm text-slate-600">Send a bill photo to Gemini for reading. Review every suggested line before confirming stock changes.</p></div>
+            <label className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl bg-sky-600 px-4 py-3 text-sm font-bold text-white hover:bg-sky-700"><CameraIcon className="h-5 w-5" />{photo ? 'Choose another bill' : 'Take or upload bill'}<input ref={inputRef} type="file" accept="image/*" className="sr-only" onChange={(event) => selectPhoto(event.target.files?.[0])} /></label>
         </div>
-        {photo && <div className="flex flex-col gap-4 border-t border-slate-100 bg-slate-50 p-5 sm:flex-row sm:items-center"><img src={preview} alt="Selected inventory bill" className="h-28 w-full rounded-xl border border-slate-200 object-cover sm:w-32" /><p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-700">{photo.name}</p><button type="button" disabled={scanning} onClick={scan} className="rounded-xl bg-slate-900 px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{scanning ? `Reading… ${progress}%` : 'Read bill'}</button></div>}
+        {photo && <div className="flex flex-col gap-4 border-t border-slate-100 bg-slate-50 p-5 sm:flex-row sm:items-center"><img src={preview} alt="Selected inventory bill" className="h-28 w-full rounded-xl border border-slate-200 object-cover sm:w-32" /><p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-700">{photo.name}</p><button type="button" disabled={scanning} onClick={scan} className="rounded-xl bg-slate-900 px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{scanning ? 'Reading with Gemini…' : 'Read bill'}</button></div>}
         {rows.length > 0 && <div className="border-t border-slate-100 p-5">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-bold text-slate-900">Review stock changes</h3><p className="text-xs text-slate-500">OCR suggestions can be wrong. Confirm the item and unit on every line.</p></div><button type="button" onClick={addRow} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700"><PlusIcon className="h-4 w-4" /> Add row</button></div>
             <label className="mb-4 block max-w-sm text-xs font-semibold text-slate-600">Bill / invoice reference<input value={reference} maxLength={80} onChange={(event) => setReference(event.target.value)} placeholder="Optional" className={`${inputClass} mt-1`} /></label>

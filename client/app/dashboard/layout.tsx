@@ -17,11 +17,11 @@ export default async function DashboardLayout({
     }
 
     return (
-        <div className="flex h-screen bg-slate-50">
+        <div className="flex min-h-dvh flex-col bg-slate-50 lg:h-dvh lg:flex-row">
             <Sidebar />
-            <main className="min-w-0 flex-1 overflow-y-auto">
+            <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
                 <div className="flex min-h-full flex-col">
-                    <div className="mx-auto w-full max-w-7xl flex-1 px-6 py-8">
+                    <div className="mx-auto w-full max-w-7xl flex-1 px-4 py-5 sm:px-6 sm:py-8">
                         <OrderAlerts restaurantId={session.user.restaurantId ? String(session.user.restaurantId) : undefined} baselineTime={Date.now()} />
                         <LowStockAlerts restaurantId={session.user.restaurantId ? String(session.user.restaurantId) : undefined} />
                         {children}

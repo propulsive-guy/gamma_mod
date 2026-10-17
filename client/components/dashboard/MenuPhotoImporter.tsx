@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { CameraIcon, CheckCircleIcon, SparklesIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { toast } from 'react-hot-toast';
 import { importScannedMenuItems, type ScannedMenuItem } from '@/app/actions/menu';
-import { parseMenuOcrText } from '@/lib/menuOcr';
+import { extractMenuPhoto } from '@/app/actions/geminiOcr';
 
 type ReviewItem = ScannedMenuItem & { selected: boolean };
 
@@ -16,13 +16,16 @@ export function MenuPhotoImporter() {
     const [preview, setPreview] = useState('');
     const [items, setItems] = useState<ReviewItem[]>([]);
     const [scanning, setScanning] = useState(false);
-    const [scanProgress, setScanProgress] = useState(0);
     const [importing, setImporting] = useState(false);
 
     const selectPhoto = (file?: File) => {
         if (!file) return;
-        if (file.size > 12 * 1024 * 1024) {
-            toast.error('Menu photo must be 12MB or smaller');
+        if (!file.type.startsWith('image/')) {
+            toast.error('Choose a menu image from your camera or gallery');
+            return;
+        }
+        if (file.size > 9 * 1024 * 1024) {
+            toast.error('Menu photo must be 9MB or smaller');
             return;
         }
         if (preview) URL.revokeObjectURL(preview);
@@ -34,29 +37,18 @@ export function MenuPhotoImporter() {
     const scan = async () => {
         if (!photo || scanning) return;
         setScanning(true);
-        setScanProgress(0);
         try {
-            const { createWorker } = await import('tesseract.js');
-            const worker = await createWorker('eng', 1, {
-                logger: (message) => {
-                    if (message.status === 'recognizing text') setScanProgress(Math.round((message.progress || 0) * 100));
-                },
-            });
-            const result = await worker.recognize(photo);
-            await worker.terminate();
-            const parsed = parseMenuOcrText(result.data.text);
-            if (!parsed.length) {
-                toast.error('No clear item-and-price rows were found. Try a straighter, brighter photo.');
-                return;
-            }
-            setItems(parsed.map((item) => ({ ...item, selected: true })));
-            toast.success(`Found ${parsed.length} menu items. Please review them.`);
+            const formData = new FormData();
+            formData.set('image', photo);
+            const result = await extractMenuPhoto(formData);
+            if (!result.success || !result.items) return toast.error(result.error || 'Gemini could not find menu items.');
+            setItems(result.items.map((item) => ({ ...item, selected: true })));
+            toast.success(`Found ${result.items.length} menu items. Please review them.`);
         } catch (error) {
-            console.error('Local menu OCR error:', error);
+            console.error('Gemini menu image reading error:', error);
             toast.error('Could not read this photo. Try JPG or PNG with clearer text.');
         } finally {
             setScanning(false);
-            setScanProgress(0);
         }
     };
 
@@ -99,14 +91,13 @@ export function MenuPhotoImporter() {
                     <div className="rounded-2xl bg-violet-100 p-3 text-violet-700"><SparklesIcon className="h-6 w-6" /></div>
                     <div>
                         <h2 className="font-bold text-slate-900">Add menu from a photo</h2>
-                        <p className="mt-1 max-w-xl text-sm text-slate-600">Photograph your printed menu. BitByte reads it locally on this device, then lets you review every item before importing.</p>
-                        <p className="mt-1 text-xs font-medium text-emerald-700">No API key and no per-scan charge.</p>
+                        <p className="mt-1 max-w-xl text-sm text-slate-600">Send a photo of your printed menu to Gemini, then review each suggested item before importing.</p>
                     </div>
                 </div>
                 <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-violet-700">
                     <CameraIcon className="h-5 w-5" />
                     {photo ? 'Choose another photo' : 'Upload menu photo'}
-                    <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="sr-only" onChange={(event) => selectPhoto(event.target.files?.[0])} />
+                    <input ref={inputRef} type="file" accept="image/*" className="sr-only" onChange={(event) => selectPhoto(event.target.files?.[0])} />
                 </label>
             </div>
 
@@ -119,7 +110,7 @@ export function MenuPhotoImporter() {
                             <p className="mt-1 text-xs text-slate-500">For best results, use a straight, well-lit photo with readable prices.</p>
                         </div>
                         <button type="button" disabled={scanning} onClick={scan} className="rounded-xl bg-slate-900 px-5 py-3 text-sm font-bold text-white disabled:opacity-50">
-                            {scanning ? `Reading menu… ${scanProgress}%` : 'Scan menu'}
+                            {scanning ? 'Reading menu with Gemini…' : 'Scan menu'}
                         </button>
                     </div>
                 </div>
