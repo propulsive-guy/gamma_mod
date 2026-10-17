@@ -7,7 +7,8 @@ type InventoryLine = { name: string; quantity: number; unit: string; unitCost: n
 type MenuLine = { name: string; description: string; price: number; category: string };
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
-const GEMINI_REQUEST_TIMEOUT_MS = 24_000;
+const SCAN_FUNCTION_BUDGET_MS = 55_000;
+const GEMINI_REQUEST_TIMEOUT_MS = 52_000;
 const GEMINI_MODEL = 'gemini-3.8-flash';
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
@@ -94,6 +95,8 @@ function validateMenuItems(value: unknown): MenuLine[] {
 }
 
 async function extractWithGemini(formData: FormData, task: GeminiTask) {
+    // Leave five seconds for Next/Vercel to serialize and return the Server Action.
+    const deadline = Date.now() + SCAN_FUNCTION_BUDGET_MS;
     try {
         const session = await auth();
         if (!session?.user?.restaurantId) return { success: false as const, error: 'Please sign in again.' };
@@ -118,6 +121,8 @@ async function extractWithGemini(formData: FormData, task: GeminiTask) {
 
         const imageData = toBase64(new Uint8Array(await file.arrayBuffer()));
         const requestExtraction = async (prompt: string) => {
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0) return { error: 'The scan reached its Vercel time limit before Gemini finished. Please try again.' } as const;
             const response = await fetch(GEMINI_ENDPOINT, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
@@ -137,9 +142,9 @@ async function extractWithGemini(formData: FormData, task: GeminiTask) {
                         maxOutputTokens: 8192,
                     },
                 }),
-                // Keep room under the route's 60s Vercel function duration for
-                // the optional second extraction pass and auth/database work.
-                signal: AbortSignal.timeout(GEMINI_REQUEST_TIMEOUT_MS),
+                // Share one total time budget across both passes so a retry can
+                // never extend this Server Action beyond its configured duration.
+                signal: AbortSignal.timeout(Math.min(GEMINI_REQUEST_TIMEOUT_MS, remainingMs)),
             });
             if (!response.ok) {
                 let apiMessage = '';
@@ -210,7 +215,7 @@ async function extractWithGemini(formData: FormData, task: GeminiTask) {
         const name = error instanceof Error ? error.name : 'UnknownError';
         console.error('Gemini image extraction request failed:', { name, message: error instanceof Error ? error.message : String(error) });
         if (name === 'TimeoutError' || name === 'AbortError') {
-            return { success: false as const, error: 'Gemini timed out while reading the image. Try again; if it repeats, check the Vercel function duration and logs.' };
+            return { success: false as const, error: 'Gemini did not finish within the 55-second scan window. Please try again; if it repeats, check the Vercel Function logs.' };
         }
         if (error instanceof TypeError && /fetch|network/i.test(error.message)) {
             return { success: false as const, error: 'Vercel could not reach the Gemini API. Check the Vercel Function logs and retry.' };
