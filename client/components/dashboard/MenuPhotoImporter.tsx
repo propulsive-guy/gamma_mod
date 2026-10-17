@@ -6,6 +6,7 @@ import { CameraIcon, CheckCircleIcon, SparklesIcon, TrashIcon, XMarkIcon } from 
 import { toast } from 'react-hot-toast';
 import { importScannedMenuItems, type ScannedMenuItem } from '@/app/actions/menu';
 import { extractMenuPhoto } from '@/app/actions/geminiOcr';
+import { prepareScanImage } from '@/lib/prepareScanImage';
 
 type ReviewItem = ScannedMenuItem & { selected: boolean };
 
@@ -24,8 +25,8 @@ export function MenuPhotoImporter() {
             toast.error('Choose a menu image from your camera or gallery');
             return;
         }
-        if (file.size > 9 * 1024 * 1024) {
-            toast.error('Menu photo must be 9MB or smaller');
+        if (file.size > 30 * 1024 * 1024) {
+            toast.error('Menu photo is too large. Crop it to the menu or take a screenshot, then try again.');
             return;
         }
         if (preview) URL.revokeObjectURL(preview);
@@ -39,14 +40,14 @@ export function MenuPhotoImporter() {
         setScanning(true);
         try {
             const formData = new FormData();
-            formData.set('image', photo);
+            formData.set('image', await prepareScanImage(photo));
             const result = await extractMenuPhoto(formData);
             if (!result.success || !result.items) return toast.error(result.error || 'Gemini could not find menu items.');
             setItems(result.items.map((item) => ({ ...item, selected: true })));
             toast.success(`Found ${result.items.length} menu items. Please review them.`);
         } catch (error) {
             console.error('Gemini menu image reading error:', error);
-            toast.error('Could not read this photo. Try JPG or PNG with clearer text.');
+            toast.error(error instanceof Error ? error.message : 'The menu scan request failed. Check your connection and try again.');
         } finally {
             setScanning(false);
         }

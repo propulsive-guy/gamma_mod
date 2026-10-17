@@ -6,6 +6,7 @@ import { CameraIcon, CheckCircleIcon, PlusIcon, TrashIcon } from '@heroicons/rea
 import { toast } from 'react-hot-toast';
 import { applyInventoryBillPurchase } from '@/app/actions/inventory';
 import { extractInventoryBill } from '@/app/actions/geminiOcr';
+import { prepareScanImage } from '@/lib/prepareScanImage';
 
 type InventoryItem = { _id: string; name: string; unit: string; currentStock: number; costPerUnit: number };
 type ParsedBillLine = { name: string; quantity: number; unit: string; unitCost: number; sourceText: string };
@@ -29,7 +30,7 @@ export function InventoryBillScanner({ items }: { items: InventoryItem[] }) {
     const selectPhoto = (file?: File) => {
         if (!file) return;
         if (!file.type.startsWith('image/')) return toast.error('Choose an image from your camera or gallery');
-        if (file.size > 8 * 1024 * 1024) return toast.error('Bill photo must be 8MB or smaller');
+        if (file.size > 30 * 1024 * 1024) return toast.error('Bill photo is too large. Crop it to the bill or take a screenshot, then try again.');
         setPhoto(file);
         setRows([]);
         setPreview(URL.createObjectURL(file));
@@ -40,7 +41,7 @@ export function InventoryBillScanner({ items }: { items: InventoryItem[] }) {
         setScanning(true);
         try {
             const formData = new FormData();
-            formData.set('image', photo);
+            formData.set('image', await prepareScanImage(photo));
             const result = await extractInventoryBill(formData);
             if (!result.success || !result.lines) return toast.error(result.error || 'Gemini could not find inventory rows.');
             setRows(result.lines.map((row) => {
@@ -53,7 +54,7 @@ export function InventoryBillScanner({ items }: { items: InventoryItem[] }) {
             const details = error instanceof Error ? error.message : '';
             const lowerDetails = details.toLowerCase();
             if (lowerDetails.includes('413') || lowerDetails.includes('too large') || lowerDetails.includes('payload')) {
-                toast.error('This photo is too large to upload. Choose a smaller image or take a screenshot of the bill.');
+                toast.error('This photo is too large to upload. Crop it to the bill or take a screenshot, then try again.');
             } else if (lowerDetails.includes('server action') || lowerDetails.includes('deployment')) {
                 toast.error('The bill reader deployment is out of date. Reload the app and try again.');
             } else if (details) {

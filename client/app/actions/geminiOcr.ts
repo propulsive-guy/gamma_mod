@@ -6,7 +6,7 @@ type GeminiTask = 'inventory' | 'menu';
 type InventoryLine = { name: string; quantity: number; unit: string; unitCost: number; sourceText: string };
 type MenuLine = { name: string; description: string; price: number; category: string };
 
-const MAX_IMAGE_BYTES = 9 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const GEMINI_REQUEST_TIMEOUT_MS = 24_000;
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
 const INVENTORY_UNITS = new Set(['kg', 'g', 'l', 'ml', 'piece', 'pack', 'box', 'bottle', 'can', '']);
