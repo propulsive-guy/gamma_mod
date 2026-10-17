@@ -1,6 +1,7 @@
 'use server';
 
 import { auth } from '@/lib/auth';
+import { getCloudflareContext } from '@opennextjs/cloudflare';
 
 type GeminiTask = 'inventory' | 'menu';
 type InventoryLine = { name: string; quantity: number; unit: string; unitCost: number; sourceText: string };
@@ -9,6 +10,16 @@ type MenuLine = { name: string; description: string; price: number; category: st
 const MAX_IMAGE_BYTES = 9 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
 const INVENTORY_UNITS = new Set(['kg', 'g', 'l', 'ml', 'piece', 'pack', 'box', 'bottle', 'can', '']);
+
+function getGeminiApiKey() {
+    try {
+        const runtimeSecret = (getCloudflareContext().env as CloudflareEnv & { Gemini_bitbyte?: string }).Gemini_bitbyte;
+        if (typeof runtimeSecret === 'string' && runtimeSecret.trim()) return runtimeSecret.trim();
+    } catch {
+        // Local Next.js development may not have a Cloudflare runtime context.
+    }
+    return process.env.Gemini_bitbyte?.trim();
+}
 
 function toBase64(bytes: Uint8Array) {
     let binary = '';
@@ -88,7 +99,7 @@ async function extractWithGemini(formData: FormData, task: GeminiTask) {
     const session = await auth();
     if (!session?.user?.restaurantId) return { success: false as const, error: 'Please sign in again.' };
 
-    const apiKey = process.env.Gemini_bitbyte;
+    const apiKey = getGeminiApiKey();
     if (!apiKey) {
         console.error('Gemini OCR is not configured: Gemini_bitbyte is missing');
         return { success: false as const, error: 'Image reading is not configured. Add the Gemini_bitbyte server secret.' };
