@@ -4,6 +4,7 @@ import { apiFetch } from '@/client-lib/api';
 import { revalidatePath, revalidateTag } from 'next/cache';
 import dbConnect from '@/lib/db';
 import Restaurant from '@/models/Restaurant';
+import { auth } from '@/lib/auth';
 
 
 export async function getRestaurant() {
@@ -130,11 +131,36 @@ export async function updateRestaurant(formData: FormData) {
             return { success: false, error: errData.error || 'Failed to update restaurant' };
         }
 
-        const restaurant = await res.json();
+        const backendRestaurant = await res.json();
+        // The profile page and customer table page read restaurant settings from
+        // the Next.js Mongo connection. Persist these public links there as well
+        // as through the backend API so both readers use the same Mongo record.
+        const session = await auth();
+        const restaurantId = session?.user?.restaurantId;
+        if (!restaurantId) {
+            return { success: false, error: 'Your restaurant session has expired. Please sign in again.' };
+        }
+        await dbConnect();
+        const restaurant = await Restaurant.findByIdAndUpdate(
+            restaurantId,
+            { $set: { instagramHandle: instagramHandleInput, googleReviewUrl } },
+            { new: true }
+        ).lean();
+        if (!restaurant) {
+            return { success: false, error: 'Restaurant not found while saving social links' };
+        }
+
         revalidatePath('/dashboard/profile');
-        revalidatePath('/table/[restaurantId]/[tableId]', 'page');
-        if (restaurant?._id) revalidateTag(`restaurant-${restaurant._id}`, 'max');
-        return { success: true, restaurant };
+        revalidatePath('/table/[restaurantId]/[tableId]/order-status', 'page');
+        if (restaurant._id) revalidateTag(`restaurant-${restaurant._id}`, 'max');
+        return {
+            success: true,
+            restaurant: {
+                ...backendRestaurant,
+                instagramHandle: restaurant.instagramHandle,
+                googleReviewUrl: restaurant.googleReviewUrl,
+            },
+        };
     } catch (error: any) {
         console.error('Error updating restaurant:', error);
         return { success: false, error: error?.message || 'Failed to update restaurant' };
