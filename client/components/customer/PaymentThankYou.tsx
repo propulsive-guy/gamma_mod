@@ -58,7 +58,8 @@ export function PaymentThankYou({ order, restaurantName, restaurantAddress, rest
         }
     })();
     const copyStoryDetails = async () => {
-        const cafeUrl = new URL(menuHref, window.location.origin).toString();
+        const cafePath = menuHref.split('?')[0];
+        const cafeUrl = new URL(cafePath, window.location.origin).toString();
         const details = [`Tag @${instagramHandle}`, `Cafe link: ${cafeUrl}`].join('\n');
         try {
             await navigator.clipboard.writeText(details);

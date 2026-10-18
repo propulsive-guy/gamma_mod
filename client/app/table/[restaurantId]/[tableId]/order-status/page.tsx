@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import QRCode from 'qrcode';
-import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, ClockIcon, CreditCardIcon, HeartIcon, StarIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, ArrowRightIcon, ArrowTopRightOnSquareIcon, CheckIcon, ClockIcon, CreditCardIcon, HeartIcon, StarIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { getTableVisit } from '@/lib/session';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { getPublicRestaurantInfo } from '@/app/actions/restaurant';
@@ -118,6 +118,7 @@ export default function OrderStatusPage() {
     const [sessionId, setSessionId] = useState<string | null>(null);
     const [visitId, setVisitId] = useState<string | null>(null);
     const [thankYouOrder, setThankYouOrder] = useState<Order | null>(null);
+    const [copiedExperienceDetails, setCopiedExperienceDetails] = useState(false);
     const seenPaidOrders = useRef(new Set<string>());
 
     useEffect(() => {
@@ -200,6 +201,28 @@ export default function OrderStatusPage() {
         '--customer-border': statusTheme.border,
     } as CSSProperties;
     const tableUrl = '/table/' + restaurantId + '/' + tableId + (visitId ? '?visit=' + visitId : '');
+    const instagramHandle = restaurant?.instagramHandle?.trim().replace(/^@/, '') || '';
+    const instagramProfileUrl = /^[A-Za-z0-9._]{1,30}$/.test(instagramHandle)
+        ? `https://www.instagram.com/${instagramHandle}/`
+        : '';
+    const googleReviewUrl = (() => {
+        try {
+            const url = new URL(restaurant?.googleReviewUrl || '');
+            return url.protocol === 'https:' ? url.toString() : '';
+        } catch {
+            return '';
+        }
+    })();
+    const copyExperienceDetails = async () => {
+        try {
+            const cafeUrl = new URL(`/table/${restaurantId}/${tableId}`, window.location.origin).toString();
+            await navigator.clipboard.writeText(`Tag @${instagramHandle}\nCafe link: ${cafeUrl}`);
+            setCopiedExperienceDetails(true);
+            window.setTimeout(() => setCopiedExperienceDetails(false), 2500);
+        } catch {
+            setCopiedExperienceDetails(false);
+        }
+    };
 
     const openCheckout = (order: Order) => {
         if (order.checkout && typeof order.checkout.payableAmount === 'number') {
@@ -433,10 +456,38 @@ export default function OrderStatusPage() {
 
                             <div className="border-t border-zinc-100 bg-zinc-50/80 p-5 sm:px-7">
                                 {order.status === 'completed' && order.paymentStatus === 'paid' ? (
-                                    <div className="flex flex-wrap items-center justify-between gap-3">
-                                        <div className="flex items-center gap-2 font-semibold" style={{ color: accent }}><CheckIcon className="h-5 w-5" /> Payment received. Thank you! Please come again.</div>
-                                        <button type="button" onClick={() => setThankYouOrder(order)} className="rounded-full border px-3 py-2 text-xs font-semibold" style={{ borderColor: accent, color: accent }}>View thank-you</button>
-                                    </div>
+                                    <>
+                                        <div className="flex flex-wrap items-center justify-between gap-3">
+                                            <div className="flex items-center gap-2 font-semibold" style={{ color: accent }}><CheckIcon className="h-5 w-5" /> Payment received. Thank you! Please come again.</div>
+                                            <button type="button" onClick={() => setThankYouOrder(order)} className="rounded-full border px-3 py-2 text-xs font-semibold" style={{ borderColor: accent, color: accent }}>View bill</button>
+                                        </div>
+                                        <div className="mt-5 rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5">
+                                            <h3 className="font-bold text-zinc-900">Share your experience</h3>
+                                            <p className="mt-1 text-sm text-zinc-500">Thanks for visiting {restaurant?.name || 'us'}.</p>
+                                            {(instagramProfileUrl || googleReviewUrl) ? (
+                                                <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                                                    {instagramProfileUrl && (
+                                                        <div>
+                                                            <a href={instagramProfileUrl} target="_blank" rel="noopener noreferrer" onClick={() => { void copyExperienceDetails(); }} className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-fuchsia-600 via-rose-500 to-amber-500 px-4 py-3 text-center text-sm font-bold text-white">
+                                                                Share your experience on Insta <ArrowTopRightOnSquareIcon className="h-4 w-4 shrink-0" />
+                                                            </a>
+                                                            <p className="mt-2 text-xs leading-relaxed text-zinc-500">Create a Story, tag @{instagramHandle}, and add the cafe link sticker.</p>
+                                                            <button type="button" onClick={() => void copyExperienceDetails()} className="mt-1 min-h-9 text-xs font-semibold text-zinc-700 underline underline-offset-4">
+                                                                {copiedExperienceDetails ? 'Tag and cafe link copied' : 'Copy tag and cafe link'}
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                    {googleReviewUrl && (
+                                                        <a href={googleReviewUrl} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white px-4 py-3 text-center text-sm font-bold text-zinc-800">
+                                                            <StarIcon className="h-5 w-5 text-amber-500" /> Give us a review on Google <ArrowTopRightOnSquareIcon className="h-4 w-4 shrink-0 text-zinc-400" />
+                                                        </a>
+                                                    )}
+                                                </div>
+                                            ) : (
+                                                <p className="mt-3 rounded-xl bg-zinc-50 px-3 py-2 text-xs text-zinc-500">Instagram and Google links haven’t been added by the restaurant yet.</p>
+                                            )}
+                                        </div>
+                                    </>
                                 ) : order.status === 'completed' ? (
                                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                             <div>
