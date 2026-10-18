@@ -19,6 +19,31 @@ export async function getRestaurant() {
     }
 }
 
+/** Save customer-facing social links directly from the Vercel server action to MongoDB. */
+export async function saveRestaurantSocialLinks(instagramUrl: string, googleReviewUrl: string) {
+    try {
+        const session = await auth();
+        const restaurantId = session?.user?.restaurantId;
+        if (!restaurantId) return { success: false, error: 'Your restaurant session has expired. Please sign in again.' };
+
+        await dbConnect();
+        const restaurant = await Restaurant.findByIdAndUpdate(
+            restaurantId,
+            { $set: { instagramHandle: '', instagramUrl, googleReviewUrl } },
+            { new: true, runValidators: true }
+        ).select('_id instagramUrl googleReviewUrl').lean();
+
+        if (!restaurant) return { success: false, error: 'Restaurant not found' };
+        revalidatePath('/dashboard/profile');
+        revalidatePath('/table/[restaurantId]/[tableId]/order-status', 'page');
+        revalidateTag(`restaurant-${restaurant._id}`, 'max');
+        return { success: true, instagramUrl: restaurant.instagramUrl, googleReviewUrl: restaurant.googleReviewUrl };
+    } catch (error) {
+        console.error('Error saving restaurant social links to MongoDB:', error);
+        return { success: false, error: error instanceof Error ? error.message : 'Failed to save social links to MongoDB' };
+    }
+}
+
 export async function updateRestaurant(formData: FormData) {
     try {
         const name = formData.get('name') as string;
@@ -39,9 +64,6 @@ export async function updateRestaurant(formData: FormData) {
         const phone = formData.get('phone') as string;
         const address = formData.get('address') as string;
         const enableAestheticDownloads = formData.get('enableAestheticDownloads') === 'true';
-        const instagramUrl = String(formData.get('instagramUrl') ?? '');
-        const googleReviewUrl = String(formData.get('googleReviewUrl') ?? '');
-
         let logoUrl = formData.get('logoUrl') as string;
         const logoFile = formData.get('logo') as File;
 
@@ -87,28 +109,7 @@ export async function updateRestaurant(formData: FormData) {
             }
         }
 
-        // Persist the links to the Mongo database read by the table page before
-        // calling the separate Express API. This keeps the customer page current
-        // even if the backend deployment is on an older build.
-        const session = await auth();
-        const restaurantId = session?.user?.restaurantId;
-        if (!restaurantId) {
-            return { success: false, error: 'Your restaurant session has expired. Please sign in again.' };
-        }
-        await dbConnect();
-        const savedRestaurant = await Restaurant.findByIdAndUpdate(
-            restaurantId,
-            { $set: { instagramHandle: '', instagramUrl, googleReviewUrl } },
-            { new: true }
-        ).select('_id instagramHandle googleReviewUrl').lean();
-        if (!savedRestaurant) {
-            return { success: false, error: 'Restaurant not found while saving social links' };
-        }
-
-        let res: Response | null = null;
-        let warning = '';
-        try {
-            res = await apiFetch('/api/v1/restaurant/profile', {
+        const res = await apiFetch('/api/v1/restaurant/profile', {
                 method: 'PUT',
                 body: JSON.stringify({
                 name,
@@ -130,34 +131,17 @@ export async function updateRestaurant(formData: FormData) {
                 phone,
                 address: address.trim(),
                 enableAestheticDownloads,
-                instagramHandle: '',
-                instagramUrl,
-                googleReviewUrl,
                 }),
             });
-        } catch (error) {
-            console.error('Backend profile update failed after social links were saved:', error);
-            warning = 'Social links were saved, but other profile settings could not sync to the backend.';
-        }
-
-        revalidatePath('/dashboard/profile');
-        revalidatePath('/table/[restaurantId]/[tableId]/order-status', 'page');
-        revalidateTag(`restaurant-${savedRestaurant._id}`, 'max');
-        let backendRestaurant: Record<string, unknown> = {};
-        if (res?.ok) {
-            backendRestaurant = await res.json().catch(() => ({}));
-        } else if (res) {
+        if (!res.ok) {
             const errData = await res.json().catch(() => ({}));
-            warning = `Social links were saved. Other profile settings did not sync: ${errData.error || 'backend update failed'}`;
+            return { success: false, error: errData.error || 'Failed to update restaurant profile' };
         }
+        const restaurant = await res.json();
+        revalidatePath('/dashboard/profile');
         return {
             success: true,
-            warning,
-            restaurant: {
-                ...backendRestaurant,
-                instagramUrl,
-                googleReviewUrl,
-            },
+            restaurant,
         };
     } catch (error: any) {
         console.error('Error updating restaurant:', error);
@@ -171,23 +155,7 @@ export async function getPublicRestaurantInfo(restaurantId: string) {
         const restaurant = await Restaurant.findById(restaurantId)
             .select('name address phone upiId upiPayeeName merchantCode appId gstPercentage sgstPercentage packagingCharge fssaiNumber themeColor logoAccentColor accentSource fontFamily colorScheme logoUrl coverImageUrl enableAestheticDownloads instagramHandle instagramUrl googleReviewUrl')
             .lean();
-        if (restaurant?.instagramHandle || restaurant?.instagramUrl || restaurant?.googleReviewUrl) {
-            return JSON.parse(JSON.stringify(restaurant));
-        }
-
-        // The legacy Express deployment may be connected to the production
-        // Mongo database while the Next.js app uses a separate read connection.
-        // Fall back to the backend's public restaurant endpoint for these links.
-        const response = await apiFetch(`/api/v1/restaurant/public/${encodeURIComponent(restaurantId)}`);
-        if (!response.ok) return restaurant ? JSON.parse(JSON.stringify(restaurant)) : null;
-        const backendRestaurant = await response.json();
-        return JSON.parse(JSON.stringify({
-            ...restaurant,
-            ...backendRestaurant,
-            instagramHandle: backendRestaurant.instagramHandle || restaurant?.instagramHandle || '',
-            instagramUrl: backendRestaurant.instagramUrl || restaurant?.instagramUrl || '',
-            googleReviewUrl: backendRestaurant.googleReviewUrl || restaurant?.googleReviewUrl || '',
-        }));
+        return restaurant ? JSON.parse(JSON.stringify(restaurant)) : null;
     } catch (error) {
         console.error('Error fetching public restaurant info:', error);
         return null;

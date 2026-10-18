@@ -11,7 +11,7 @@ import {
     CameraIcon,
     ShoppingBagIcon,
 } from '@heroicons/react/24/outline';
-import { updateRestaurant } from '@/app/actions/restaurant';
+import { saveRestaurantSocialLinks, updateRestaurant } from '@/app/actions/restaurant';
 import { uploadFile } from '@/app/actions/upload';
 import { RestaurantAddressField } from '@/components/RestaurantAddressField';
 
@@ -250,8 +250,6 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
             submitData.append('name', name);
             submitData.append('phone', phone);
             submitData.append('address', address);
-            submitData.append('instagramUrl', instagramHandle.trim());
-            submitData.append('googleReviewUrl', googleReviewUrl.trim());
             submitData.append('upiId', upiId);
             submitData.append('upiPayeeName', upiPayeeName);
             submitData.append('merchantCode', merchantCode);
@@ -269,13 +267,18 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
             submitData.append('coverImageUrl', finalCoverUrl);
             submitData.append('enableAestheticDownloads', enableAestheticDownloads ? 'true' : 'false');
 
+            const socialResult = await saveRestaurantSocialLinks(instagramHandle, googleReviewUrl);
+            if (!socialResult.success) {
+                toast.error(socialResult.error || 'Failed to save social links to MongoDB', { id: toastId });
+                return;
+            }
+
             const result = await updateRestaurant(submitData);
 
             if (result.success) {
-                if (result.warning) toast(result.warning, { id: toastId, duration: 6000 });
-                else toast.success('Changes saved successfully!', { id: toastId });
+                toast.success('Profile and social links saved successfully!', { id: toastId });
             } else {
-                toast.error(result.error || 'Failed to save changes', { id: toastId });
+                toast.error(`Social links were saved. Other profile settings failed: ${result.error || 'Failed to save changes'}`, { id: toastId, duration: 6000 });
             }
         } catch (error) {
             console.error('Error saving settings:', error);

@@ -72,9 +72,14 @@ export class RestaurantController {
                 Math.abs(Math.round(parsedPackagingCharge * 100) - parsedPackagingCharge * 100) > 1e-8) {
                 return res.status(400).json({ error: 'Packaging charge must be between ₹0 and ₹10,000 with at most two decimal places' });
             }
-            const hasInstagramUrl = typeof instagramUrl === 'string';
-            const savedInstagramUrl = hasInstagramUrl ? instagramUrl : (typeof instagramHandle === 'string' ? instagramHandle : '');
-            const savedGoogleReviewUrl = typeof googleReviewUrl === 'string' ? googleReviewUrl : '';
+            const socialFields: Record<string, string> = {};
+            if (typeof instagramUrl === 'string') {
+                socialFields.instagramHandle = '';
+                socialFields.instagramUrl = instagramUrl;
+            } else if (typeof instagramHandle === 'string') {
+                socialFields.instagramHandle = instagramHandle;
+            }
+            if (typeof googleReviewUrl === 'string') socialFields.googleReviewUrl = googleReviewUrl;
 
             const existing = await Restaurant.findById(user.restaurantId).select('logoUrl logoAccentColor fssaiNumber');
             if (!existing) {
@@ -108,9 +113,7 @@ export class RestaurantController {
                     phone,
                     address: address.trim().slice(0, 300),
                     enableAestheticDownloads: !!enableAestheticDownloads,
-                    instagramHandle: hasInstagramUrl ? '' : (typeof instagramHandle === 'string' ? instagramHandle : ''),
-                    instagramUrl: savedInstagramUrl,
-                    googleReviewUrl: savedGoogleReviewUrl,
+                    ...socialFields,
                 },
                 { new: true }
             );
