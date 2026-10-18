@@ -99,6 +99,24 @@ export async function updateRestaurant(formData: FormData) {
             }
         }
 
+        // Persist the links to the Mongo database read by the table page before
+        // calling the separate Express API. This keeps the customer page current
+        // even if the backend deployment is on an older build.
+        const session = await auth();
+        const restaurantId = session?.user?.restaurantId;
+        if (!restaurantId) {
+            return { success: false, error: 'Your restaurant session has expired. Please sign in again.' };
+        }
+        await dbConnect();
+        const savedRestaurant = await Restaurant.findByIdAndUpdate(
+            restaurantId,
+            { $set: { instagramHandle: instagramHandleInput, googleReviewUrl } },
+            { new: true }
+        ).select('_id instagramHandle googleReviewUrl').lean();
+        if (!savedRestaurant) {
+            return { success: false, error: 'Restaurant not found while saving social links' };
+        }
+
         const res = await apiFetch('/api/v1/restaurant/profile', {
             method: 'PUT',
             body: JSON.stringify({
@@ -132,33 +150,16 @@ export async function updateRestaurant(formData: FormData) {
         }
 
         const backendRestaurant = await res.json();
-        // The profile page and customer table page read restaurant settings from
-        // the Next.js Mongo connection. Persist these public links there as well
-        // as through the backend API so both readers use the same Mongo record.
-        const session = await auth();
-        const restaurantId = session?.user?.restaurantId;
-        if (!restaurantId) {
-            return { success: false, error: 'Your restaurant session has expired. Please sign in again.' };
-        }
-        await dbConnect();
-        const restaurant = await Restaurant.findByIdAndUpdate(
-            restaurantId,
-            { $set: { instagramHandle: instagramHandleInput, googleReviewUrl } },
-            { new: true }
-        ).lean();
-        if (!restaurant) {
-            return { success: false, error: 'Restaurant not found while saving social links' };
-        }
 
         revalidatePath('/dashboard/profile');
         revalidatePath('/table/[restaurantId]/[tableId]/order-status', 'page');
-        if (restaurant._id) revalidateTag(`restaurant-${restaurant._id}`, 'max');
+        revalidateTag(`restaurant-${savedRestaurant._id}`, 'max');
         return {
             success: true,
             restaurant: {
                 ...backendRestaurant,
-                instagramHandle: restaurant.instagramHandle,
-                googleReviewUrl: restaurant.googleReviewUrl,
+                instagramHandle: savedRestaurant.instagramHandle,
+                googleReviewUrl: savedRestaurant.googleReviewUrl,
             },
         };
     } catch (error: any) {
@@ -173,8 +174,22 @@ export async function getPublicRestaurantInfo(restaurantId: string) {
         const restaurant = await Restaurant.findById(restaurantId)
             .select('name address phone upiId upiPayeeName merchantCode appId gstPercentage sgstPercentage packagingCharge fssaiNumber themeColor logoAccentColor accentSource fontFamily colorScheme logoUrl coverImageUrl enableAestheticDownloads instagramHandle googleReviewUrl')
             .lean();
-        if (!restaurant) return null;
-        return JSON.parse(JSON.stringify(restaurant));
+        if (restaurant?.instagramHandle || restaurant?.googleReviewUrl) {
+            return JSON.parse(JSON.stringify(restaurant));
+        }
+
+        // The legacy Express deployment may be connected to the production
+        // Mongo database while the Next.js app uses a separate read connection.
+        // Fall back to the backend's public restaurant endpoint for these links.
+        const response = await apiFetch(`/api/v1/restaurant/public/${encodeURIComponent(restaurantId)}`);
+        if (!response.ok) return restaurant ? JSON.parse(JSON.stringify(restaurant)) : null;
+        const backendRestaurant = await response.json();
+        return JSON.parse(JSON.stringify({
+            ...restaurant,
+            ...backendRestaurant,
+            instagramHandle: backendRestaurant.instagramHandle || restaurant?.instagramHandle || '',
+            googleReviewUrl: backendRestaurant.googleReviewUrl || restaurant?.googleReviewUrl || '',
+        }));
     } catch (error) {
         console.error('Error fetching public restaurant info:', error);
         return null;
