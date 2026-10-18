@@ -2,6 +2,7 @@
 
 import { apiFetch } from '@/client-lib/api';
 import { revalidatePath, revalidateTag } from 'next/cache';
+import mongoose from 'mongoose';
 import dbConnect from '@/lib/db';
 import Restaurant from '@/models/Restaurant';
 import { auth } from '@/lib/auth';
@@ -34,26 +35,42 @@ export async function saveRestaurantSocialLinks(instagramUrl: string, googleRevi
         if (!restaurantId) return { success: false, error: 'Your restaurant session has expired. Please sign in again.' };
 
         await dbConnect();
-        const updatedRestaurant = await Restaurant.findByIdAndUpdate(
-            restaurantId,
-            { $set: { instagramHandle: '', instagramUrl, googleReviewUrl } },
-            { new: true, runValidators: true }
-        ).select('_id instagramUrl googleReviewUrl').lean();
+        const restaurantObjectId = new mongoose.Types.ObjectId(restaurantId);
+        const writeResult = await Restaurant.collection.updateOne(
+            { _id: restaurantObjectId },
+            { $set: { instagramHandle: '', instagramUrl, googleReviewUrl } }
+        );
+        if (!writeResult.acknowledged) {
+            return { success: false, error: 'MongoDB did not acknowledge the social-link update.' };
+        }
+        if (writeResult.matchedCount !== 1) {
+            return { success: false, error: 'Restaurant record was not found in the MongoDB database configured for Vercel.' };
+        }
 
-        if (!updatedRestaurant) return { success: false, error: 'Restaurant not found' };
+        // Read from the primary to avoid a stale replica making a successful write look missing.
+        const savedRestaurant = await Restaurant.collection.findOne(
+            { _id: restaurantObjectId },
+            { projection: { instagramUrl: 1, googleReviewUrl: 1 }, readPreference: 'primary' }
+        );
 
         const fieldsNotSaved = [
-            updatedRestaurant.instagramUrl !== instagramUrl ? 'Instagram URL' : '',
-            updatedRestaurant.googleReviewUrl !== googleReviewUrl ? 'Google review URL' : '',
+            savedRestaurant?.instagramUrl !== instagramUrl ? 'Instagram URL' : '',
+            savedRestaurant?.googleReviewUrl !== googleReviewUrl ? 'Google review URL' : '',
         ].filter(Boolean);
         if (fieldsNotSaved.length > 0) {
-            return { success: false, error: `MongoDB did not return the saved ${fieldsNotSaved.join(' and ')}. Check that the Vercel MongoDB user can write to this restaurant record.` };
+            console.error('Social link MongoDB verification mismatch', {
+                restaurantId,
+                matchedCount: writeResult.matchedCount,
+                instagramMatches: savedRestaurant?.instagramUrl === instagramUrl,
+                googleReviewMatches: savedRestaurant?.googleReviewUrl === googleReviewUrl,
+            });
+            return { success: false, error: `MongoDB matched the restaurant, but did not return the saved ${fieldsNotSaved.join(' and ')} from the primary. Check the Vercel database/collection and MongoDB write permissions.` };
         }
 
         revalidatePath('/dashboard/profile');
         revalidatePath('/table/[restaurantId]/[tableId]/order-status', 'page');
-        revalidateTag(`restaurant-${updatedRestaurant._id}`, 'max');
-        return { success: true, instagramUrl: updatedRestaurant.instagramUrl, googleReviewUrl: updatedRestaurant.googleReviewUrl };
+        revalidateTag(`restaurant-${restaurantObjectId}`, 'max');
+        return { success: true, instagramUrl: savedRestaurant?.instagramUrl, googleReviewUrl: savedRestaurant?.googleReviewUrl };
     } catch (error) {
         console.error('Error saving restaurant social links to MongoDB:', error);
         return { success: false, error: error instanceof Error ? error.message : 'Failed to save social links to MongoDB' };
