@@ -56,6 +56,8 @@ export class RestaurantController {
                 phone,
                 address,
                 enableAestheticDownloads,
+                instagramHandle,
+                googleReviewUrl,
             } = req.body;
 
             if (!name) {
@@ -68,6 +70,18 @@ export class RestaurantController {
             if (!Number.isFinite(parsedPackagingCharge) || parsedPackagingCharge < 0 || parsedPackagingCharge > 10000 ||
                 Math.abs(Math.round(parsedPackagingCharge * 100) - parsedPackagingCharge * 100) > 1e-8) {
                 return res.status(400).json({ error: 'Packaging charge must be between ₹0 and ₹10,000 with at most two decimal places' });
+            }
+            const normalizedInstagramHandle = typeof instagramHandle === 'string' ? instagramHandle.trim().replace(/^@/, '') : '';
+            if (normalizedInstagramHandle && !/^[A-Za-z0-9._]{1,30}$/.test(normalizedInstagramHandle)) {
+                return res.status(400).json({ error: 'Enter a valid Instagram username' });
+            }
+            const normalizedGoogleReviewUrl = typeof googleReviewUrl === 'string' ? googleReviewUrl.trim() : '';
+            if (normalizedGoogleReviewUrl) {
+                try {
+                    if (new URL(normalizedGoogleReviewUrl).protocol !== 'https:') throw new Error();
+                } catch {
+                    return res.status(400).json({ error: 'Google review link must be a valid HTTPS URL' });
+                }
             }
 
             const existing = await Restaurant.findById(user.restaurantId).select('logoUrl logoAccentColor fssaiNumber');
@@ -102,6 +116,8 @@ export class RestaurantController {
                     phone,
                     address: address.trim().slice(0, 300),
                     enableAestheticDownloads: !!enableAestheticDownloads,
+                    instagramHandle: normalizedInstagramHandle,
+                    googleReviewUrl: normalizedGoogleReviewUrl,
                 },
                 { new: true }
             );
@@ -129,7 +145,7 @@ export class RestaurantController {
             }
 
             const restaurant = await Restaurant.findById(id)
-                .select('name description address phone upiId upiPayeeName merchantCode appId gstPercentage sgstPercentage packagingCharge fssaiNumber themeColor logoAccentColor accentSource fontFamily colorScheme logoUrl coverImageUrl enableAestheticDownloads')
+                .select('name description address phone upiId upiPayeeName merchantCode appId gstPercentage sgstPercentage packagingCharge fssaiNumber themeColor logoAccentColor accentSource fontFamily colorScheme logoUrl coverImageUrl enableAestheticDownloads instagramHandle googleReviewUrl')
                 .lean();
 
             if (!restaurant) {

@@ -37,6 +37,8 @@ interface RestaurantData {
     sgstPercentage?: number;
     packagingCharge?: number;
     enableAestheticDownloads?: boolean;
+    instagramHandle?: string;
+    googleReviewUrl?: string;
 }
 
 export default function ProfileForm({ initialData }: { initialData: RestaurantData }) {
@@ -44,6 +46,8 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
     const [name, setName] = useState(initialData.name || '');
     const [phone, setPhone] = useState(initialData.phone || '');
     const [address, setAddress] = useState(initialData.address || '');
+    const [instagramHandle, setInstagramHandle] = useState(initialData.instagramHandle || '');
+    const [googleReviewUrl, setGoogleReviewUrl] = useState(initialData.googleReviewUrl || '');
     const [upiId, setUpiId] = useState(initialData.upiId || '');
     const [upiPayeeName, setUpiPayeeName] = useState(initialData.upiPayeeName || '');
     const [merchantCode, setMerchantCode] = useState(initialData.merchantCode || '0000');
@@ -245,6 +249,8 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
             submitData.append('name', name);
             submitData.append('phone', phone);
             submitData.append('address', address);
+            submitData.append('instagramHandle', instagramHandle.trim().replace(/^@/, ''));
+            submitData.append('googleReviewUrl', googleReviewUrl.trim());
             submitData.append('upiId', upiId);
             submitData.append('upiPayeeName', upiPayeeName);
             submitData.append('merchantCode', merchantCode);
@@ -363,6 +369,52 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
                                 </label>
                             </div>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* ── Social and review links ── */}
+            <div className="bg-white rounded-2xl border border-slate-200/60 overflow-hidden">
+                <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-6">
+                    <div className="p-2 rounded-lg bg-fuchsia-50">
+                        <CameraIcon className="w-4 h-4 text-fuchsia-600" />
+                    </div>
+                    <div>
+                        <h2 className="text-sm font-semibold text-slate-900">Social and review links</h2>
+                        <p className="text-xs text-slate-500">Show customers where to share a Story and leave a Google review</p>
+                    </div>
+                </div>
+                <div className="space-y-5 p-4 sm:p-6">
+                    <div>
+                        <label htmlFor="instagramHandle" className={labelClass}>Instagram username</label>
+                        <div className="flex h-11 items-center rounded-xl border border-slate-200 bg-white focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-500/20">
+                            <span className="pl-4 text-sm text-slate-400">@</span>
+                            <input
+                                type="text"
+                                id="instagramHandle"
+                                value={instagramHandle}
+                                onChange={(event) => setInstagramHandle(event.target.value.replace(/^@/, ''))}
+                                className="h-full min-w-0 flex-1 rounded-r-xl bg-transparent px-2 py-2.5 text-sm text-slate-900 outline-none"
+                                placeholder="yourcafe"
+                                autoCapitalize="none"
+                                autoCorrect="off"
+                                maxLength={30}
+                            />
+                        </div>
+                        <p className={hintClass}>Customers can open your Instagram profile and copy your @tag for their Story.</p>
+                    </div>
+                    <div>
+                        <label htmlFor="googleReviewUrl" className={labelClass}>Google review link</label>
+                        <input
+                            type="url"
+                            id="googleReviewUrl"
+                            value={googleReviewUrl}
+                            onChange={(event) => setGoogleReviewUrl(event.target.value)}
+                            className={inputClass}
+                            placeholder="https://g.page/r/.../review"
+                            inputMode="url"
+                        />
+                        <p className={hintClass}>Paste your direct Google review link or Google Maps link. It must start with https://.</p>
                     </div>
                 </div>
             </div>

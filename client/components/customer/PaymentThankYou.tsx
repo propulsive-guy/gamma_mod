@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ArrowRightIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowRightIcon, ArrowTopRightOnSquareIcon, StarIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { useReactToPrint } from 'react-to-print';
 import { formatCurrency } from '@/lib/utils';
 import { contrastTextColor } from '@/lib/color';
@@ -37,14 +37,37 @@ interface PaymentThankYouProps {
     logoUrl?: string;
     accent: string;
     menuHref: string;
+    instagramHandle?: string;
+    googleReviewUrl?: string;
     onClose: () => void;
 }
 
-export function PaymentThankYou({ order, restaurantName, restaurantAddress, restaurantPhone, fssaiNumber, logoUrl, accent, menuHref, onClose }: PaymentThankYouProps) {
+export function PaymentThankYou({ order, restaurantName, restaurantAddress, restaurantPhone, fssaiNumber, logoUrl, accent, menuHref, instagramHandle, googleReviewUrl, onClose }: PaymentThankYouProps) {
     const billRef = useRef<HTMLDivElement>(null);
+    const [storyDetailsCopied, setStoryDetailsCopied] = useState(false);
     const saveBill = useReactToPrint({ contentRef: billRef, documentTitle: `Bill-${order._id.slice(-6).toUpperCase()}` });
     const checkout = order.checkout;
     const amount = checkout?.payableAmount ?? order.total;
+    const instagramProfileUrl = instagramHandle ? `https://www.instagram.com/${instagramHandle.replace(/^@/, '')}/` : '';
+    const safeGoogleReviewUrl = (() => {
+        try {
+            const url = new URL(googleReviewUrl || '');
+            return url.protocol === 'https:' ? url.toString() : '';
+        } catch {
+            return '';
+        }
+    })();
+    const copyStoryDetails = async () => {
+        const cafeUrl = new URL(menuHref, window.location.origin).toString();
+        const details = [`Tag @${instagramHandle}`, `Cafe link: ${cafeUrl}`].join('\n');
+        try {
+            await navigator.clipboard.writeText(details);
+            setStoryDetailsCopied(true);
+            window.setTimeout(() => setStoryDetailsCopied(false), 2500);
+        } catch {
+            setStoryDetailsCopied(false);
+        }
+    };
     useEffect(() => {
         const previousOverflow = document.body.style.overflow;
         document.body.style.overflow = 'hidden';
@@ -131,6 +154,44 @@ export function PaymentThankYou({ order, restaurantName, restaurantAddress, rest
                         </div>
                         <p className="mt-5 text-center text-xs text-zinc-500">Thank you for visiting {restaurantName}.</p>
                     </div>
+
+                    {(instagramProfileUrl || safeGoogleReviewUrl) && (
+                        <section aria-label="Share your experience" className="mt-6 w-full max-w-sm rounded-[22px] border border-zinc-200 bg-white p-4 text-left shadow-sm sm:p-5">
+                            <h2 className="text-base font-bold">Enjoyed your visit?</h2>
+                            <p className="mt-1 text-sm text-zinc-600">Share a Story or leave a review to support {restaurantName}.</p>
+                            <div className="mt-4 grid gap-2">
+                                {instagramProfileUrl && (
+                                    <div>
+                                        <a
+                                            href={instagramProfileUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            onClick={() => { void copyStoryDetails(); }}
+                                            className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-fuchsia-600 via-rose-500 to-amber-500 px-4 py-3 text-center text-sm font-bold text-white transition hover:brightness-105 active:scale-[0.99]"
+                                        >
+                                            Share your experience on Insta <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+                                        </a>
+                                        <p className="mt-2 text-xs leading-relaxed text-zinc-500">
+                                            In Instagram, create a Story, tag <span className="font-semibold text-zinc-700">@{instagramHandle?.replace(/^@/, '')}</span>, then add the cafe link sticker.
+                                        </p>
+                                        <button type="button" onClick={() => void copyStoryDetails()} className="mt-2 min-h-10 text-xs font-semibold text-zinc-700 underline decoration-zinc-300 underline-offset-4">
+                                            {storyDetailsCopied ? 'Tag and cafe link copied' : 'Copy tag and cafe link'}
+                                        </button>
+                                    </div>
+                                )}
+                                {safeGoogleReviewUrl && (
+                                    <a
+                                        href={safeGoogleReviewUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-center text-sm font-bold text-zinc-800 transition hover:bg-zinc-50 active:scale-[0.99]"
+                                    >
+                                        <StarIcon className="h-5 w-5 text-amber-500" /> Give us a review on Google <ArrowTopRightOnSquareIcon className="h-4 w-4 text-zinc-400" />
+                                    </a>
+                                )}
+                            </div>
+                        </section>
+                    )}
                 </div>
 
                 <div className="grid w-full gap-3 sm:grid-cols-2">

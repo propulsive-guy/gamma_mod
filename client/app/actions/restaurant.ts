@@ -39,6 +39,19 @@ export async function updateRestaurant(formData: FormData) {
         const phone = formData.get('phone') as string;
         const address = formData.get('address') as string;
         const enableAestheticDownloads = formData.get('enableAestheticDownloads') === 'true';
+        const instagramHandleInput = String(formData.get('instagramHandle') ?? '').trim().replace(/^@/, '');
+        const googleReviewUrl = String(formData.get('googleReviewUrl') ?? '').trim();
+
+        if (instagramHandleInput && !/^[A-Za-z0-9._]{1,30}$/.test(instagramHandleInput)) {
+            return { success: false, error: 'Enter a valid Instagram username (letters, numbers, periods, or underscores)' };
+        }
+        if (googleReviewUrl) {
+            try {
+                if (new URL(googleReviewUrl).protocol !== 'https:') throw new Error();
+            } catch {
+                return { success: false, error: 'Enter a valid Google Maps or review link starting with https://' };
+            }
+        }
 
         let logoUrl = formData.get('logoUrl') as string;
         const logoFile = formData.get('logo') as File;
@@ -107,6 +120,8 @@ export async function updateRestaurant(formData: FormData) {
                 phone,
                 address: address.trim(),
                 enableAestheticDownloads,
+                instagramHandle: instagramHandleInput,
+                googleReviewUrl,
             }),
         });
 
@@ -130,7 +145,7 @@ export async function getPublicRestaurantInfo(restaurantId: string) {
     try {
         await dbConnect();
         const restaurant = await Restaurant.findById(restaurantId)
-            .select('name address phone upiId upiPayeeName merchantCode appId gstPercentage sgstPercentage packagingCharge fssaiNumber themeColor logoAccentColor accentSource fontFamily colorScheme logoUrl coverImageUrl enableAestheticDownloads')
+            .select('name address phone upiId upiPayeeName merchantCode appId gstPercentage sgstPercentage packagingCharge fssaiNumber themeColor logoAccentColor accentSource fontFamily colorScheme logoUrl coverImageUrl enableAestheticDownloads instagramHandle googleReviewUrl')
             .lean();
         if (!restaurant) return null;
         return JSON.parse(JSON.stringify(restaurant));

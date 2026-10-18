@@ -58,6 +58,8 @@ interface RestaurantInfo {
     sgstPercentage?: number;
     packagingCharge?: number;
     enableAestheticDownloads?: boolean;
+    instagramHandle?: string;
+    googleReviewUrl?: string;
 }
 
 interface MenuItem {
@@ -557,6 +559,8 @@ export default function OrderStatusPage() {
                     logoUrl={restaurant?.logoUrl}
                     accent={accent}
                     menuHref={tableUrl}
+                    instagramHandle={restaurant?.instagramHandle}
+                    googleReviewUrl={restaurant?.googleReviewUrl}
                     onClose={() => setThankYouOrder(null)}
                 />
             )}
