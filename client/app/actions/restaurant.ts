@@ -6,38 +6,6 @@ import dbConnect from '@/lib/db';
 import Restaurant from '@/models/Restaurant';
 import { auth } from '@/lib/auth';
 
-function normalizeInstagramInput(value: string): { handle: string; url: string } | null {
-    const input = value.trim();
-    if (!input) return { handle: '', url: '' };
-    let handle = input.replace(/^@/, '');
-    if (/^(https?:\/\/)?(www\.)?(m\.)?instagram\.com\//i.test(input)) {
-        try {
-            const url = new URL(/^https?:\/\//i.test(input) ? input : `https://${input}`);
-            if (!['instagram.com', 'www.instagram.com', 'm.instagram.com'].includes(url.hostname.toLowerCase())) return null;
-            handle = url.pathname.split('/').filter(Boolean)[0] || '';
-        } catch {
-            return null;
-        }
-    }
-    if (!/^[A-Za-z0-9._]{1,30}$/.test(handle)) return null;
-    return { handle, url: `https://www.instagram.com/${handle}/` };
-}
-
-function normalizeHttpsUrl(value: string): string | null {
-    const input = value.trim();
-    if (!input) return '';
-    try {
-        const normalized = /^https?:\/\//i.test(input) ? input : `https://${input}`;
-        const url = new URL(normalized);
-        if (url.protocol === 'http:') url.protocol = 'https:';
-        if (url.protocol !== 'https:') return null;
-        return url.toString();
-    } catch {
-        return null;
-    }
-}
-
-
 export async function getRestaurant() {
     try {
         const res = await apiFetch('/api/v1/restaurant/profile');
@@ -71,10 +39,8 @@ export async function updateRestaurant(formData: FormData) {
         const phone = formData.get('phone') as string;
         const address = formData.get('address') as string;
         const enableAestheticDownloads = formData.get('enableAestheticDownloads') === 'true';
-        const instagram = normalizeInstagramInput(String(formData.get('instagramUrl') ?? formData.get('instagramHandle') ?? ''));
-        const googleReviewUrl = normalizeHttpsUrl(String(formData.get('googleReviewUrl') ?? ''));
-        if (!instagram) return { success: false, error: 'Enter an Instagram username or an instagram.com profile URL' };
-        if (googleReviewUrl === null) return { success: false, error: 'Enter a valid Google Maps or review URL' };
+        const instagramUrl = String(formData.get('instagramUrl') ?? '');
+        const googleReviewUrl = String(formData.get('googleReviewUrl') ?? '');
 
         let logoUrl = formData.get('logoUrl') as string;
         const logoFile = formData.get('logo') as File;
@@ -132,7 +98,7 @@ export async function updateRestaurant(formData: FormData) {
         await dbConnect();
         const savedRestaurant = await Restaurant.findByIdAndUpdate(
             restaurantId,
-            { $set: { instagramHandle: instagram.handle, instagramUrl: instagram.url, googleReviewUrl } },
+            { $set: { instagramHandle: '', instagramUrl, googleReviewUrl } },
             { new: true }
         ).select('_id instagramHandle googleReviewUrl').lean();
         if (!savedRestaurant) {
@@ -164,8 +130,8 @@ export async function updateRestaurant(formData: FormData) {
                 phone,
                 address: address.trim(),
                 enableAestheticDownloads,
-                instagramHandle: instagram.handle,
-                instagramUrl: instagram.url,
+                instagramHandle: '',
+                instagramUrl,
                 googleReviewUrl,
                 }),
             });
@@ -189,8 +155,7 @@ export async function updateRestaurant(formData: FormData) {
             warning,
             restaurant: {
                 ...backendRestaurant,
-                instagramHandle: instagram.handle,
-                instagramUrl: instagram.url,
+                instagramUrl,
                 googleReviewUrl,
             },
         };

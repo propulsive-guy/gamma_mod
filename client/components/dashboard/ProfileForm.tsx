@@ -388,21 +388,21 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
                 </div>
                 <div className="space-y-5 p-4 sm:p-6">
                     <div>
-                        <label htmlFor="instagramHandle" className={labelClass}>Instagram page URL or username</label>
+                        <label htmlFor="instagramHandle" className={labelClass}>Instagram profile URL</label>
                         <div className="flex h-11 items-center rounded-xl border border-slate-200 bg-white focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-500/20">
                             <input
                                 type="text"
                                 id="instagramHandle"
                                 value={instagramHandle}
-                                onChange={(event) => setInstagramHandle(event.target.value.replace(/^@/, ''))}
+                                onChange={(event) => setInstagramHandle(event.target.value)}
                                 className="h-full min-w-0 flex-1 rounded-xl bg-transparent px-4 py-2.5 text-sm text-slate-900 outline-none"
-                                placeholder="yourcafe or instagram.com/yourcafe"
+                                placeholder="https://www.instagram.com/yourcafe/"
                                 autoCapitalize="none"
                                 autoCorrect="off"
                                 maxLength={2048}
                             />
                         </div>
-                        <p className={hintClass}>Paste your Instagram profile URL or enter the username. Both formats are accepted.</p>
+                        <p className={hintClass}>Paste the full Instagram profile URL. It will be stored exactly as entered.</p>
                     </div>
                     <div>
                         <label htmlFor="googleReviewUrl" className={labelClass}>Google review link</label>
@@ -415,7 +415,7 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
                             placeholder="https://g.page/r/.../review"
                             inputMode="url"
                         />
-                        <p className={hintClass}>Paste your direct Google review link or Google Maps link. The link will be saved securely.</p>
+                        <p className={hintClass}>Paste the full Google review or Maps URL. It will be stored exactly as entered.</p>
                     </div>
                 </div>
             </div>

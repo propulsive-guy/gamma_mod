@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { ArrowRightIcon, ArrowTopRightOnSquareIcon, StarIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { useReactToPrint } from 'react-to-print';
@@ -38,37 +38,33 @@ interface PaymentThankYouProps {
     accent: string;
     menuHref: string;
     instagramHandle?: string;
+    instagramUrl?: string;
     googleReviewUrl?: string;
     onClose: () => void;
 }
 
-export function PaymentThankYou({ order, restaurantName, restaurantAddress, restaurantPhone, fssaiNumber, logoUrl, accent, menuHref, instagramHandle, googleReviewUrl, onClose }: PaymentThankYouProps) {
+export function PaymentThankYou({ order, restaurantName, restaurantAddress, restaurantPhone, fssaiNumber, logoUrl, accent, menuHref, instagramHandle, instagramUrl, googleReviewUrl, onClose }: PaymentThankYouProps) {
     const billRef = useRef<HTMLDivElement>(null);
-    const [storyDetailsCopied, setStoryDetailsCopied] = useState(false);
     const saveBill = useReactToPrint({ contentRef: billRef, documentTitle: `Bill-${order._id.slice(-6).toUpperCase()}` });
     const checkout = order.checkout;
     const amount = checkout?.payableAmount ?? order.total;
-    const instagramProfileUrl = instagramHandle ? `https://www.instagram.com/${instagramHandle.replace(/^@/, '')}/` : '';
-    const safeGoogleReviewUrl = (() => {
+    const instagramProfileUrl = (() => {
+        const candidate = instagramUrl || (instagramHandle ? `https://www.instagram.com/${instagramHandle.replace(/^@/, '')}/` : '');
         try {
-            const url = new URL(googleReviewUrl || '');
-            return url.protocol === 'https:' ? url.toString() : '';
+            const url = new URL(candidate);
+            return url.protocol === 'https:' || url.protocol === 'http:' ? candidate : '';
         } catch {
             return '';
         }
     })();
-    const copyStoryDetails = async () => {
-        const cafePath = menuHref.split('?')[0];
-        const cafeUrl = new URL(cafePath, window.location.origin).toString();
-        const details = [`Tag @${instagramHandle}`, `Cafe link: ${cafeUrl}`].join('\n');
+    const safeGoogleReviewUrl = (() => {
         try {
-            await navigator.clipboard.writeText(details);
-            setStoryDetailsCopied(true);
-            window.setTimeout(() => setStoryDetailsCopied(false), 2500);
+            const url = new URL(googleReviewUrl || '');
+            return url.protocol === 'https:' || url.protocol === 'http:' ? googleReviewUrl || '' : '';
         } catch {
-            setStoryDetailsCopied(false);
+            return '';
         }
-    };
+    })();
     useEffect(() => {
         const previousOverflow = document.body.style.overflow;
         document.body.style.overflow = 'hidden';
@@ -167,17 +163,10 @@ export function PaymentThankYou({ order, restaurantName, restaurantAddress, rest
                                             href={instagramProfileUrl}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            onClick={() => { void copyStoryDetails(); }}
                                             className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-fuchsia-600 via-rose-500 to-amber-500 px-4 py-3 text-center text-sm font-bold text-white transition hover:brightness-105 active:scale-[0.99]"
                                         >
                                             Share your experience on Insta <ArrowTopRightOnSquareIcon className="h-4 w-4" />
                                         </a>
-                                        <p className="mt-2 text-xs leading-relaxed text-zinc-500">
-                                            In Instagram, create a Story, tag <span className="font-semibold text-zinc-700">@{instagramHandle?.replace(/^@/, '')}</span>, then add the cafe link sticker.
-                                        </p>
-                                        <button type="button" onClick={() => void copyStoryDetails()} className="mt-2 min-h-10 text-xs font-semibold text-zinc-700 underline decoration-zinc-300 underline-offset-4">
-                                            {storyDetailsCopied ? 'Tag and cafe link copied' : 'Copy tag and cafe link'}
-                                        </button>
                                     </div>
                                 )}
                                 {safeGoogleReviewUrl && (

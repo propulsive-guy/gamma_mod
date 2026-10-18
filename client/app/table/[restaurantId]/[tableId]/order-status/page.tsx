@@ -59,6 +59,7 @@ interface RestaurantInfo {
     packagingCharge?: number;
     enableAestheticDownloads?: boolean;
     instagramHandle?: string;
+    instagramUrl?: string;
     googleReviewUrl?: string;
 }
 
@@ -118,7 +119,6 @@ export default function OrderStatusPage() {
     const [sessionId, setSessionId] = useState<string | null>(null);
     const [visitId, setVisitId] = useState<string | null>(null);
     const [thankYouOrder, setThankYouOrder] = useState<Order | null>(null);
-    const [copiedExperienceDetails, setCopiedExperienceDetails] = useState(false);
     const seenPaidOrders = useRef(new Set<string>());
 
     useEffect(() => {
@@ -202,27 +202,24 @@ export default function OrderStatusPage() {
     } as CSSProperties;
     const tableUrl = '/table/' + restaurantId + '/' + tableId + (visitId ? '?visit=' + visitId : '');
     const instagramHandle = restaurant?.instagramHandle?.trim().replace(/^@/, '') || '';
-    const instagramProfileUrl = /^[A-Za-z0-9._]{1,30}$/.test(instagramHandle)
-        ? `https://www.instagram.com/${instagramHandle}/`
-        : '';
-    const googleReviewUrl = (() => {
+    const instagramProfileUrl = (() => {
+        const candidate = restaurant?.instagramUrl || (instagramHandle ? `https://www.instagram.com/${instagramHandle}/` : '');
         try {
-            const url = new URL(restaurant?.googleReviewUrl || '');
-            return url.protocol === 'https:' ? url.toString() : '';
+            const parsed = new URL(candidate);
+            return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? candidate : '';
         } catch {
             return '';
         }
     })();
-    const copyExperienceDetails = async () => {
+    const googleReviewUrl = (() => {
         try {
-            const cafeUrl = new URL(`/table/${restaurantId}/${tableId}`, window.location.origin).toString();
-            await navigator.clipboard.writeText(`Tag @${instagramHandle}\nCafe link: ${cafeUrl}`);
-            setCopiedExperienceDetails(true);
-            window.setTimeout(() => setCopiedExperienceDetails(false), 2500);
+            const candidate = restaurant?.googleReviewUrl || '';
+            const url = new URL(candidate);
+            return url.protocol === 'https:' || url.protocol === 'http:' ? candidate : '';
         } catch {
-            setCopiedExperienceDetails(false);
+            return '';
         }
-    };
+    })();
 
     const openCheckout = (order: Order) => {
         if (order.checkout && typeof order.checkout.payableAmount === 'number') {
@@ -468,13 +465,9 @@ export default function OrderStatusPage() {
                                                 <div className="mt-4 grid gap-2 sm:grid-cols-2">
                                                     {instagramProfileUrl && (
                                                         <div>
-                                                            <a href={instagramProfileUrl} target="_blank" rel="noopener noreferrer" onClick={() => { void copyExperienceDetails(); }} className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-fuchsia-600 via-rose-500 to-amber-500 px-4 py-3 text-center text-sm font-bold text-white">
+                                                            <a href={instagramProfileUrl} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-fuchsia-600 via-rose-500 to-amber-500 px-4 py-3 text-center text-sm font-bold text-white">
                                                                 Share your experience on Insta <ArrowTopRightOnSquareIcon className="h-4 w-4 shrink-0" />
                                                             </a>
-                                                            <p className="mt-2 text-xs leading-relaxed text-zinc-500">Create a Story, tag @{instagramHandle}, and add the cafe link sticker.</p>
-                                                            <button type="button" onClick={() => void copyExperienceDetails()} className="mt-1 min-h-9 text-xs font-semibold text-zinc-700 underline underline-offset-4">
-                                                                {copiedExperienceDetails ? 'Tag and cafe link copied' : 'Copy tag and cafe link'}
-                                                            </button>
                                                         </div>
                                                     )}
                                                     {googleReviewUrl && (
@@ -611,6 +604,7 @@ export default function OrderStatusPage() {
                     accent={accent}
                     menuHref={tableUrl}
                     instagramHandle={restaurant?.instagramHandle}
+                    instagramUrl={restaurant?.instagramUrl}
                     googleReviewUrl={restaurant?.googleReviewUrl}
                     onClose={() => setThankYouOrder(null)}
                 />

@@ -167,13 +167,11 @@ const restaurantSchema = new Schema<IRestaurant>(
         },
         instagramUrl: {
             type: String,
-            trim: true,
             default: '',
             maxlength: 2048,
         },
         googleReviewUrl: {
             type: String,
-            trim: true,
             default: '',
             maxlength: 2048,
         },
