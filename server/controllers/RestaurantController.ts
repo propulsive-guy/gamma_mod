@@ -57,6 +57,7 @@ export class RestaurantController {
                 address,
                 enableAestheticDownloads,
                 instagramHandle,
+                instagramUrl,
                 googleReviewUrl,
             } = req.body;
 
@@ -71,14 +72,29 @@ export class RestaurantController {
                 Math.abs(Math.round(parsedPackagingCharge * 100) - parsedPackagingCharge * 100) > 1e-8) {
                 return res.status(400).json({ error: 'Packaging charge must be between ₹0 and ₹10,000 with at most two decimal places' });
             }
-            const normalizedInstagramHandle = typeof instagramHandle === 'string' ? instagramHandle.trim().replace(/^@/, '') : '';
+            const instagramInput = typeof instagramUrl === 'string' && instagramUrl.trim() ? instagramUrl.trim() : typeof instagramHandle === 'string' ? instagramHandle.trim() : '';
+            let normalizedInstagramHandle = instagramInput.replace(/^@/, '');
+            if (/^(https?:\/\/)?(www\.)?(m\.)?instagram\.com\//i.test(instagramInput)) {
+                try {
+                    const instagramProfile = new URL(/^https?:\/\//i.test(instagramInput) ? instagramInput : `https://${instagramInput}`);
+                    if (!['instagram.com', 'www.instagram.com', 'm.instagram.com'].includes(instagramProfile.hostname.toLowerCase())) throw new Error();
+                    normalizedInstagramHandle = instagramProfile.pathname.split('/').filter(Boolean)[0] || '';
+                } catch {
+                    return res.status(400).json({ error: 'Enter an Instagram username or instagram.com profile URL' });
+                }
+            }
             if (normalizedInstagramHandle && !/^[A-Za-z0-9._]{1,30}$/.test(normalizedInstagramHandle)) {
                 return res.status(400).json({ error: 'Enter a valid Instagram username' });
             }
-            const normalizedGoogleReviewUrl = typeof googleReviewUrl === 'string' ? googleReviewUrl.trim() : '';
+            const normalizedInstagramUrl = normalizedInstagramHandle ? `https://www.instagram.com/${normalizedInstagramHandle}/` : '';
+            let normalizedGoogleReviewUrl = typeof googleReviewUrl === 'string' ? googleReviewUrl.trim() : '';
             if (normalizedGoogleReviewUrl) {
                 try {
-                    if (new URL(normalizedGoogleReviewUrl).protocol !== 'https:') throw new Error();
+                    normalizedGoogleReviewUrl = /^https?:\/\//i.test(normalizedGoogleReviewUrl) ? normalizedGoogleReviewUrl : `https://${normalizedGoogleReviewUrl}`;
+                    const googleUrl = new URL(normalizedGoogleReviewUrl);
+                    if (googleUrl.protocol === 'http:') googleUrl.protocol = 'https:';
+                    if (googleUrl.protocol !== 'https:') throw new Error();
+                    normalizedGoogleReviewUrl = googleUrl.toString();
                 } catch {
                     return res.status(400).json({ error: 'Google review link must be a valid HTTPS URL' });
                 }
@@ -117,6 +133,7 @@ export class RestaurantController {
                     address: address.trim().slice(0, 300),
                     enableAestheticDownloads: !!enableAestheticDownloads,
                     instagramHandle: normalizedInstagramHandle,
+                    instagramUrl: normalizedInstagramUrl,
                     googleReviewUrl: normalizedGoogleReviewUrl,
                 },
                 { new: true }
@@ -145,7 +162,7 @@ export class RestaurantController {
             }
 
             const restaurant = await Restaurant.findById(id)
-                .select('name description address phone upiId upiPayeeName merchantCode appId gstPercentage sgstPercentage packagingCharge fssaiNumber themeColor logoAccentColor accentSource fontFamily colorScheme logoUrl coverImageUrl enableAestheticDownloads instagramHandle googleReviewUrl')
+                .select('name description address phone upiId upiPayeeName merchantCode appId gstPercentage sgstPercentage packagingCharge fssaiNumber themeColor logoAccentColor accentSource fontFamily colorScheme logoUrl coverImageUrl enableAestheticDownloads instagramHandle instagramUrl googleReviewUrl')
                 .lean();
 
             if (!restaurant) {

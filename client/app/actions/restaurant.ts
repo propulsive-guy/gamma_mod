@@ -6,6 +6,37 @@ import dbConnect from '@/lib/db';
 import Restaurant from '@/models/Restaurant';
 import { auth } from '@/lib/auth';
 
+function normalizeInstagramInput(value: string): { handle: string; url: string } | null {
+    const input = value.trim();
+    if (!input) return { handle: '', url: '' };
+    let handle = input.replace(/^@/, '');
+    if (/^(https?:\/\/)?(www\.)?(m\.)?instagram\.com\//i.test(input)) {
+        try {
+            const url = new URL(/^https?:\/\//i.test(input) ? input : `https://${input}`);
+            if (!['instagram.com', 'www.instagram.com', 'm.instagram.com'].includes(url.hostname.toLowerCase())) return null;
+            handle = url.pathname.split('/').filter(Boolean)[0] || '';
+        } catch {
+            return null;
+        }
+    }
+    if (!/^[A-Za-z0-9._]{1,30}$/.test(handle)) return null;
+    return { handle, url: `https://www.instagram.com/${handle}/` };
+}
+
+function normalizeHttpsUrl(value: string): string | null {
+    const input = value.trim();
+    if (!input) return '';
+    try {
+        const normalized = /^https?:\/\//i.test(input) ? input : `https://${input}`;
+        const url = new URL(normalized);
+        if (url.protocol === 'http:') url.protocol = 'https:';
+        if (url.protocol !== 'https:') return null;
+        return url.toString();
+    } catch {
+        return null;
+    }
+}
+
 
 export async function getRestaurant() {
     try {
@@ -40,19 +71,10 @@ export async function updateRestaurant(formData: FormData) {
         const phone = formData.get('phone') as string;
         const address = formData.get('address') as string;
         const enableAestheticDownloads = formData.get('enableAestheticDownloads') === 'true';
-        const instagramHandleInput = String(formData.get('instagramHandle') ?? '').trim().replace(/^@/, '');
-        const googleReviewUrl = String(formData.get('googleReviewUrl') ?? '').trim();
-
-        if (instagramHandleInput && !/^[A-Za-z0-9._]{1,30}$/.test(instagramHandleInput)) {
-            return { success: false, error: 'Enter a valid Instagram username (letters, numbers, periods, or underscores)' };
-        }
-        if (googleReviewUrl) {
-            try {
-                if (new URL(googleReviewUrl).protocol !== 'https:') throw new Error();
-            } catch {
-                return { success: false, error: 'Enter a valid Google Maps or review link starting with https://' };
-            }
-        }
+        const instagram = normalizeInstagramInput(String(formData.get('instagramUrl') ?? formData.get('instagramHandle') ?? ''));
+        const googleReviewUrl = normalizeHttpsUrl(String(formData.get('googleReviewUrl') ?? ''));
+        if (!instagram) return { success: false, error: 'Enter an Instagram username or an instagram.com profile URL' };
+        if (googleReviewUrl === null) return { success: false, error: 'Enter a valid Google Maps or review URL' };
 
         let logoUrl = formData.get('logoUrl') as string;
         const logoFile = formData.get('logo') as File;
@@ -110,16 +132,19 @@ export async function updateRestaurant(formData: FormData) {
         await dbConnect();
         const savedRestaurant = await Restaurant.findByIdAndUpdate(
             restaurantId,
-            { $set: { instagramHandle: instagramHandleInput, googleReviewUrl } },
+            { $set: { instagramHandle: instagram.handle, instagramUrl: instagram.url, googleReviewUrl } },
             { new: true }
         ).select('_id instagramHandle googleReviewUrl').lean();
         if (!savedRestaurant) {
             return { success: false, error: 'Restaurant not found while saving social links' };
         }
 
-        const res = await apiFetch('/api/v1/restaurant/profile', {
-            method: 'PUT',
-            body: JSON.stringify({
+        let res: Response | null = null;
+        let warning = '';
+        try {
+            res = await apiFetch('/api/v1/restaurant/profile', {
+                method: 'PUT',
+                body: JSON.stringify({
                 name,
                 upiId,
                 upiPayeeName,
@@ -139,27 +164,34 @@ export async function updateRestaurant(formData: FormData) {
                 phone,
                 address: address.trim(),
                 enableAestheticDownloads,
-                instagramHandle: instagramHandleInput,
+                instagramHandle: instagram.handle,
+                instagramUrl: instagram.url,
                 googleReviewUrl,
-            }),
-        });
-
-        if (!res.ok) {
-            const errData = await res.json();
-            return { success: false, error: errData.error || 'Failed to update restaurant' };
+                }),
+            });
+        } catch (error) {
+            console.error('Backend profile update failed after social links were saved:', error);
+            warning = 'Social links were saved, but other profile settings could not sync to the backend.';
         }
-
-        const backendRestaurant = await res.json();
 
         revalidatePath('/dashboard/profile');
         revalidatePath('/table/[restaurantId]/[tableId]/order-status', 'page');
         revalidateTag(`restaurant-${savedRestaurant._id}`, 'max');
+        let backendRestaurant: Record<string, unknown> = {};
+        if (res?.ok) {
+            backendRestaurant = await res.json().catch(() => ({}));
+        } else if (res) {
+            const errData = await res.json().catch(() => ({}));
+            warning = `Social links were saved. Other profile settings did not sync: ${errData.error || 'backend update failed'}`;
+        }
         return {
             success: true,
+            warning,
             restaurant: {
                 ...backendRestaurant,
-                instagramHandle: savedRestaurant.instagramHandle,
-                googleReviewUrl: savedRestaurant.googleReviewUrl,
+                instagramHandle: instagram.handle,
+                instagramUrl: instagram.url,
+                googleReviewUrl,
             },
         };
     } catch (error: any) {
@@ -172,9 +204,9 @@ export async function getPublicRestaurantInfo(restaurantId: string) {
     try {
         await dbConnect();
         const restaurant = await Restaurant.findById(restaurantId)
-            .select('name address phone upiId upiPayeeName merchantCode appId gstPercentage sgstPercentage packagingCharge fssaiNumber themeColor logoAccentColor accentSource fontFamily colorScheme logoUrl coverImageUrl enableAestheticDownloads instagramHandle googleReviewUrl')
+            .select('name address phone upiId upiPayeeName merchantCode appId gstPercentage sgstPercentage packagingCharge fssaiNumber themeColor logoAccentColor accentSource fontFamily colorScheme logoUrl coverImageUrl enableAestheticDownloads instagramHandle instagramUrl googleReviewUrl')
             .lean();
-        if (restaurant?.instagramHandle || restaurant?.googleReviewUrl) {
+        if (restaurant?.instagramHandle || restaurant?.instagramUrl || restaurant?.googleReviewUrl) {
             return JSON.parse(JSON.stringify(restaurant));
         }
 
@@ -188,6 +220,7 @@ export async function getPublicRestaurantInfo(restaurantId: string) {
             ...restaurant,
             ...backendRestaurant,
             instagramHandle: backendRestaurant.instagramHandle || restaurant?.instagramHandle || '',
+            instagramUrl: backendRestaurant.instagramUrl || restaurant?.instagramUrl || '',
             googleReviewUrl: backendRestaurant.googleReviewUrl || restaurant?.googleReviewUrl || '',
         }));
     } catch (error) {

@@ -27,6 +27,7 @@ export interface IRestaurant extends Document {
     customDomain?: string;
     enableAestheticDownloads?: boolean;
     instagramHandle?: string;
+    instagramUrl?: string;
     googleReviewUrl?: string;
     createdAt: Date;
     updatedAt: Date;
@@ -163,6 +164,12 @@ const restaurantSchema = new Schema<IRestaurant>(
             trim: true,
             default: '',
             maxlength: 30,
+        },
+        instagramUrl: {
+            type: String,
+            trim: true,
+            default: '',
+            maxlength: 2048,
         },
         googleReviewUrl: {
             type: String,
