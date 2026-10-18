@@ -22,21 +22,36 @@ export async function getRestaurant() {
 /** Save customer-facing social links directly from the Vercel server action to MongoDB. */
 export async function saveRestaurantSocialLinks(instagramUrl: string, googleReviewUrl: string) {
     try {
+        if (typeof instagramUrl !== 'string' || typeof googleReviewUrl !== 'string') {
+            return { success: false, error: 'Enter both social links as text.' };
+        }
+        if (instagramUrl.length > 2048 || googleReviewUrl.length > 2048) {
+            return { success: false, error: 'Each link must be 2,048 characters or fewer.' };
+        }
+
         const session = await auth();
         const restaurantId = session?.user?.restaurantId;
         if (!restaurantId) return { success: false, error: 'Your restaurant session has expired. Please sign in again.' };
 
         await dbConnect();
-        const restaurant = await Restaurant.findByIdAndUpdate(
+        const updatedRestaurant = await Restaurant.findByIdAndUpdate(
             restaurantId,
             { $set: { instagramHandle: '', instagramUrl, googleReviewUrl } },
             { new: true, runValidators: true }
-        ).select('_id instagramUrl googleReviewUrl').lean();
+        ).select('_id').lean();
 
-        if (!restaurant) return { success: false, error: 'Restaurant not found' };
+        if (!updatedRestaurant) return { success: false, error: 'Restaurant not found' };
+
+        const restaurant = await Restaurant.findById(restaurantId)
+            .select('instagramUrl googleReviewUrl')
+            .lean();
+        if (!restaurant || restaurant.instagramUrl !== instagramUrl || restaurant.googleReviewUrl !== googleReviewUrl) {
+            return { success: false, error: 'MongoDB did not return the saved URLs. Check the Vercel MONGODB_URI and restaurant record.' };
+        }
+
         revalidatePath('/dashboard/profile');
         revalidatePath('/table/[restaurantId]/[tableId]/order-status', 'page');
-        revalidateTag(`restaurant-${restaurant._id}`, 'max');
+        revalidateTag(`restaurant-${updatedRestaurant._id}`, 'max');
         return { success: true, instagramUrl: restaurant.instagramUrl, googleReviewUrl: restaurant.googleReviewUrl };
     } catch (error) {
         console.error('Error saving restaurant social links to MongoDB:', error);
