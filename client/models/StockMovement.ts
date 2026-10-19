@@ -4,7 +4,9 @@ export interface IStockMovement extends Document {
     restaurantId: mongoose.Types.ObjectId;
     inventoryItemId: mongoose.Types.ObjectId;
     orderId?: mongoose.Types.ObjectId;
-    type: 'opening' | 'purchase' | 'usage' | 'wastage' | 'correction' | 'return';
+    procurementDocumentId?: mongoose.Types.ObjectId;
+    type: 'opening' | 'purchase' | 'usage' | 'wastage' | 'correction' | 'return' | 'transfer_out' | 'transfer_in';
+    departmentId?: mongoose.Types.ObjectId;
     quantity: number;
     stockBefore: number;
     stockAfter: number;
@@ -17,7 +19,9 @@ const stockMovementSchema = new Schema<IStockMovement>({
     restaurantId: { type: Schema.Types.ObjectId, ref: 'Restaurant', required: true },
     inventoryItemId: { type: Schema.Types.ObjectId, ref: 'InventoryItem', required: true },
     orderId: { type: Schema.Types.ObjectId, ref: 'Order' },
-    type: { type: String, enum: ['opening', 'purchase', 'usage', 'wastage', 'correction', 'return'], required: true },
+    procurementDocumentId: { type: Schema.Types.ObjectId, ref: 'ProcurementDocument' },
+    type: { type: String, enum: ['opening', 'purchase', 'usage', 'wastage', 'correction', 'return', 'transfer_out', 'transfer_in'], required: true },
+    departmentId: { type: Schema.Types.ObjectId, ref: 'KitchenDepartment' },
     quantity: { type: Number, required: true },
     stockBefore: { type: Number, required: true, min: 0 },
     stockAfter: { type: Number, required: true, min: 0 },

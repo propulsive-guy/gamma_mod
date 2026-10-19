@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import dbConnect from '@/lib/db';
 import MenuItem from '@/models/MenuItem';
 import InventoryItem from '@/models/InventoryItem';
+import KitchenDepartment from '@/models/KitchenDepartment';
 import { MenuList } from '@/components/dashboard/MenuList';
 
 export const maxDuration = 60;
@@ -16,11 +17,12 @@ export default async function MenuPage() {
 
     await dbConnect();
 
-    const [menuItems, inventoryItems] = await Promise.all([
+    const [menuItems, inventoryItems, departments] = await Promise.all([
         MenuItem.find({ restaurantId: session.user.restaurantId })
             .sort({ category: 1, createdAt: -1 }).lean(),
         InventoryItem.find({ restaurantId: session.user.restaurantId, isActive: true })
             .select('name unit currentStock').sort({ name: 1 }).lean(),
+        KitchenDepartment.find({ restaurantId: session.user.restaurantId, isActive: true }).select('name').sort({ name: 1 }).lean(),
     ]);
 
     return (
@@ -34,7 +36,7 @@ export default async function MenuPage() {
                 </p>
             </div>
 
-            <MenuList initialMenuItems={JSON.parse(JSON.stringify(menuItems))} inventoryItems={JSON.parse(JSON.stringify(inventoryItems))} />
+            <MenuList initialMenuItems={JSON.parse(JSON.stringify(menuItems))} inventoryItems={JSON.parse(JSON.stringify(inventoryItems))} departments={JSON.parse(JSON.stringify(departments))} />
         </div>
     );
 }

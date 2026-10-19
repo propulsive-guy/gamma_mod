@@ -1,11 +1,13 @@
 import mongoose, { Document, Model, Schema } from 'mongoose';
 
-export type StockMovementType = 'opening' | 'purchase' | 'usage' | 'wastage' | 'correction' | 'return';
+export type StockMovementType = 'opening' | 'purchase' | 'usage' | 'wastage' | 'correction' | 'return' | 'transfer_out' | 'transfer_in';
 
 export interface IStockMovement extends Document {
     restaurantId: mongoose.Types.ObjectId;
     inventoryItemId: mongoose.Types.ObjectId;
     orderId?: mongoose.Types.ObjectId;
+    procurementDocumentId?: mongoose.Types.ObjectId;
+    departmentId?: mongoose.Types.ObjectId;
     type: StockMovementType;
     quantity: number;
     stockBefore: number;
@@ -20,7 +22,9 @@ const stockMovementSchema = new Schema<IStockMovement>({
     restaurantId: { type: Schema.Types.ObjectId, ref: 'Restaurant', required: true },
     inventoryItemId: { type: Schema.Types.ObjectId, ref: 'InventoryItem', required: true },
     orderId: { type: Schema.Types.ObjectId, ref: 'Order' },
-    type: { type: String, enum: ['opening', 'purchase', 'usage', 'wastage', 'correction', 'return'], required: true },
+    procurementDocumentId: { type: Schema.Types.ObjectId, ref: 'ProcurementDocument' },
+    type: { type: String, enum: ['opening', 'purchase', 'usage', 'wastage', 'correction', 'return', 'transfer_out', 'transfer_in'], required: true },
+    departmentId: { type: Schema.Types.ObjectId, ref: 'KitchenDepartment' },
     quantity: { type: Number, required: true },
     stockBefore: { type: Number, required: true, min: 0 },
     stockAfter: { type: Number, required: true, min: 0 },

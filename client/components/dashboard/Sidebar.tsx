@@ -14,6 +14,7 @@ import {
     ArrowRightOnRectangleIcon,
     UserCircleIcon,
     ArchiveBoxIcon,
+    BuildingStorefrontIcon,
     CreditCardIcon,
 } from '@heroicons/react/24/outline';
 
@@ -24,7 +25,8 @@ const navigation = [
     { name: 'Tables', href: '/dashboard/tables', icon: TableCellsIcon },
     { name: 'Orders', href: '/dashboard/orders', icon: ShoppingBagIcon },
     { name: 'Analytics', href: '/dashboard/analytics', icon: ChartBarIcon },
-    { name: 'Inventory', href: '/dashboard/inventory', icon: ArchiveBoxIcon },
+    { name: 'Kitchen Inventory', href: '/dashboard/inventory', icon: ArchiveBoxIcon },
+    { name: 'Store', href: '/dashboard/store', icon: BuildingStorefrontIcon },
     { name: 'Subscription', href: '/dashboard/subscription', icon: CreditCardIcon },
 ];
 

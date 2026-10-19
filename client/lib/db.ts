@@ -6,6 +6,9 @@ import '../models/Restaurant';
 import '../models/Table';
 import '../models/MenuItem';
 import '../models/Order';
+import '../models/KitchenDepartment';
+import '../models/KitchenStock';
+import '../models/KitchenStockLot';
 
 // Apply DNS fix only on local development (macOS c-ares resolver issue)
 if (typeof process !== 'undefined' && process.platform === 'darwin') {

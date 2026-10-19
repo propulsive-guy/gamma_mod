@@ -2,48 +2,20 @@
 
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import { toast } from 'react-hot-toast';
-import {
-    AdjustmentsHorizontalIcon, ArchiveBoxIcon, ArrowDownTrayIcon, ArrowUpTrayIcon,
-    BanknotesIcon, ExclamationTriangleIcon, MagnifyingGlassIcon, PlusIcon, TrashIcon,
-} from '@heroicons/react/24/outline';
-import { adjustInventoryStock, archiveInventoryItem, createInventoryItem, updateInventoryItem, type InventoryInput } from '@/app/actions/inventory';
-import { formatCurrency, formatDate } from '@/lib/utils';
-import { InventoryBillScanner } from '@/components/dashboard/InventoryBillScanner';
+import { MagnifyingGlassIcon, PlusIcon, TrashIcon } from '@heroicons/react/24/outline';
+import { archiveInventoryItem, createInventoryItem, updateInventoryItem, type InventoryInput } from '@/app/actions/inventory';
 
-type InventoryItem = InventoryInput & {
-    _id: string;
-    currentStock: number;
-    isActive: boolean;
-    createdAt: string;
-    updatedAt: string;
-};
-type Movement = {
-    _id: string;
-    inventoryItemId: { _id: string; name: string; unit: string } | string;
-    type: string;
-    quantity: number;
-    stockBefore: number;
-    stockAfter: number;
-    note?: string;
-    createdAt: string;
-};
-
+type InventoryItem = InventoryInput & { _id: string; isActive: boolean };
 const emptyForm: InventoryInput = {
     name: '', sku: '', category: 'General', unit: 'kg', currentStock: 0,
-    reorderLevel: 0, costPerUnit: 0, supplier: '', notes: '',
+    reorderLevel: 0, costPerUnit: 0, supplier: '', notes: '', wasteBehavior: 'carry_forward',
 };
 const units = ['kg', 'g', 'l', 'ml', 'piece', 'pack', 'box', 'bottle', 'can'];
+const inputClass = 'min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100';
 
-export function InventoryManager({
-    initialItems,
-    initialMovements,
-    usageByInventoryItem,
-    menuSetup,
-}: {
+export function InventoryManager({ initialItems, usageByInventoryItem, menuSetup }: {
     initialItems: InventoryItem[];
-    initialMovements: Movement[];
     usageByInventoryItem: Record<string, string[]>;
     menuSetup: { total: number; linked: number };
 }) {
@@ -53,158 +25,62 @@ export function InventoryManager({
     const [form, setForm] = useState<InventoryInput>(emptyForm);
     const [saving, setSaving] = useState(false);
     const [query, setQuery] = useState('');
-    const [stockFilter, setStockFilter] = useState<'all' | 'low' | 'out'>('all');
-    const [adjusting, setAdjusting] = useState<InventoryItem | null>(null);
-    const [adjustment, setAdjustment] = useState({ type: 'purchase', quantity: '', note: '', unitCost: '' });
-
-    const inventoryValue = initialItems.reduce((sum, item) => sum + item.currentStock * item.costPerUnit, 0);
-    const lowStock = initialItems.filter((item) => item.currentStock > 0 && item.currentStock <= item.reorderLevel);
-    const outOfStock = initialItems.filter((item) => item.currentStock === 0);
-    const needsRestock = initialItems.filter((item) => item.currentStock <= item.reorderLevel);
-    const filtered = useMemo(() => initialItems.filter((item) => {
-        const matchesQuery = `${item.name} ${item.sku} ${item.category} ${item.supplier}`.toLowerCase().includes(query.toLowerCase());
-        const matchesStock = stockFilter === 'all' || (stockFilter === 'out' ? item.currentStock === 0 : item.currentStock > 0 && item.currentStock <= item.reorderLevel);
-        return matchesQuery && matchesStock;
-    }), [initialItems, query, stockFilter]);
+    const filtered = useMemo(() => initialItems.filter((item) =>
+        `${item.name} ${item.sku} ${item.category}`.toLowerCase().includes(query.trim().toLowerCase()),
+    ), [initialItems, query]);
 
     const openNew = () => { setEditing(null); setForm(emptyForm); setShowForm(true); };
     const openEdit = (item: InventoryItem) => {
         setEditing(item);
-        setForm({ name: item.name, sku: item.sku || '', category: item.category, unit: item.unit, reorderLevel: item.reorderLevel, costPerUnit: item.costPerUnit, supplier: item.supplier || '', notes: item.notes || '' });
+        setForm({
+            name: item.name, sku: item.sku || '', category: item.category, unit: item.unit,
+            currentStock: 0, reorderLevel: item.reorderLevel, costPerUnit: item.costPerUnit,
+            supplier: item.supplier || '', notes: item.notes || '', wasteBehavior: item.wasteBehavior || 'carry_forward',
+        });
         setShowForm(true);
     };
     const save = async (event: React.FormEvent) => {
         event.preventDefault();
-        if (!form.name.trim() || form.reorderLevel < 0 || form.costPerUnit < 0 || (!editing && Number(form.currentStock) < 0)) {
-            toast.error('Check the name, stock, reorder level, and cost');
-            return;
-        }
+        if (!form.name.trim() || form.costPerUnit < 0) return toast.error('Enter an ingredient name and a valid cost');
         setSaving(true);
         const result = editing ? await updateInventoryItem(editing._id, form) : await createInventoryItem(form);
         setSaving(false);
-        if (!result.success) return toast.error(result.error || 'Could not save item');
-        toast.success(editing ? 'Inventory item updated' : 'Inventory item added');
-        window.dispatchEvent(new Event('inventory-stock-changed'));
+        if (!result.success) return toast.error(result.error || 'Could not save ingredient');
+        toast.success(editing ? 'Ingredient updated' : 'Ingredient added');
         setShowForm(false);
         router.refresh();
     };
-    const saveAdjustment = async (event: React.FormEvent) => {
-        event.preventDefault();
-        if (!adjusting || !Number(adjustment.quantity)) return toast.error('Enter a quantity');
-        setSaving(true);
-        const result = await adjustInventoryStock(adjusting._id, {
-            type: adjustment.type, quantity: Number(adjustment.quantity), note: adjustment.note,
-            ...(adjustment.type === 'purchase' && adjustment.unitCost !== '' ? { unitCost: Number(adjustment.unitCost) } : {}),
-        });
-        setSaving(false);
-        if (!result.success) return toast.error(result.error || 'Could not adjust stock');
-        toast.success('Stock updated');
-        window.dispatchEvent(new Event('inventory-stock-changed'));
-        setAdjusting(null);
-        setAdjustment({ type: 'purchase', quantity: '', note: '', unitCost: '' });
-        router.refresh();
-    };
     const archive = async (item: InventoryItem) => {
-        if (!window.confirm(`Archive ${item.name}? Its movement history will be preserved.`)) return;
+        if (!window.confirm(`Archive ${item.name}?`)) return;
         const result = await archiveInventoryItem(item._id);
-        if (!result.success) return toast.error(result.error || 'Could not archive item');
-        toast.success('Inventory item archived');
-        window.dispatchEvent(new Event('inventory-stock-changed'));
+        if (!result.success) return toast.error(result.error || 'Could not archive ingredient');
+        toast.success('Ingredient archived');
         router.refresh();
     };
-    const inputClass = 'h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100';
-    const summaryCards = [
-        { label: 'Active items', value: initialItems.length, icon: ArchiveBoxIcon, tone: 'bg-sky-50 text-sky-600' },
-        { label: 'Low stock', value: lowStock.length, icon: ExclamationTriangleIcon, tone: 'bg-amber-50 text-amber-600' },
-        { label: 'Out of stock', value: outOfStock.length, icon: ArrowDownTrayIcon, tone: 'bg-red-50 text-red-600' },
-        { label: 'Stock value', value: formatCurrency(inventoryValue), icon: BanknotesIcon, tone: 'bg-emerald-50 text-emerald-600' },
-    ];
 
-    return (
-        <div className="space-y-6">
-            <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-                <div><h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">Inventory Management</h1><p className="mt-1 text-sm text-slate-500">Track ingredients, supplies, costs, purchasing, usage, and wastage.</p></div>
-                <button onClick={openNew} className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-sky-600"><PlusIcon className="h-5 w-5" /> Add inventory item</button>
-            </div>
+    return <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 sm:p-5">
+        <header className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+            <div><h2 className="text-lg font-bold text-slate-900">Ingredient catalog</h2><p className="mt-1 text-sm text-slate-500">Kitchen stock is shown above by department. This list is only the shared ingredient and recipe catalog.</p></div>
+            <button onClick={openNew} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-sky-600 px-4 text-sm font-bold text-white"><PlusIcon className="h-5 w-5" /> Add ingredient</button>
+        </header>
 
-            <section className="flex flex-col gap-4 rounded-2xl border border-sky-200 bg-sky-50 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
-                <div>
-                    <h2 className="font-bold text-slate-900">Connect dishes to ingredients</h2>
-                    <p className="mt-1 max-w-3xl text-sm text-slate-600">Inventory categories only help organize stock. To deduct ingredients automatically, set the amount used for one serving in Menu. Example: Paneer Butter Masala → Paneer → 100 g. We convert g to kg when needed and deduct stock when an order is marked Served.</p>
-                    <p className="mt-2 text-xs font-semibold text-slate-700">{menuSetup.linked} of {menuSetup.total} menu items linked · {Math.max(0, menuSetup.total - menuSetup.linked)} still need setup</p>
-                </div>
-                <Link href="/dashboard/menu" className="inline-flex min-h-11 shrink-0 items-center justify-center rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-700">Set up menu ingredients</Link>
-            </section>
+        <section className="flex flex-col gap-3 rounded-xl border border-sky-100 bg-sky-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div><h3 className="font-bold text-slate-900">Menu recipe setup</h3><p className="mt-1 text-sm text-slate-600">Link menu dishes to ingredients and quantities per serving. Served orders deduct from that kitchen department.</p><p className="mt-1 text-xs font-semibold text-slate-700">{menuSetup.linked} of {menuSetup.total} menu items linked</p></div>
+            <a href="/dashboard/menu" className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-lg bg-sky-700 px-4 text-sm font-bold text-white">Set up menu recipes</a>
+        </section>
 
-            <InventoryBillScanner items={initialItems.map(({ _id, name, unit, currentStock, costPerUnit }) => ({ _id, name, unit, currentStock, costPerUnit }))} />
+        {showForm && <form onSubmit={save} className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="flex items-center justify-between sm:col-span-2 lg:col-span-3"><h3 className="font-bold text-slate-900">{editing ? 'Edit ingredient' : 'Add ingredient'}</h3><button type="button" onClick={() => setShowForm(false)} className="px-2 py-1 text-sm font-semibold text-slate-500">Close</button></div>
+            <label className="text-xs font-semibold text-slate-600">Ingredient name<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} className={`mt-1 ${inputClass}`} /></label>
+            <label className="text-xs font-semibold text-slate-600">Category<input value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} className={`mt-1 ${inputClass}`} /></label>
+            <label className="text-xs font-semibold text-slate-600">Code (optional)<input value={form.sku} onChange={(event) => setForm({ ...form, sku: event.target.value })} className={`mt-1 ${inputClass}`} /></label>
+            <label className="text-xs font-semibold text-slate-600">Stock unit<select disabled={!!editing && !!usageByInventoryItem[editing._id]?.length} value={form.unit} onChange={(event) => setForm({ ...form, unit: event.target.value })} className={`mt-1 ${inputClass} disabled:bg-slate-100`}>{units.map((unit) => <option key={unit}>{unit}</option>)}</select></label>
+            <label className="text-xs font-semibold text-slate-600">Cost per unit (₹)<input type="number" min="0" step="0.01" value={form.costPerUnit} onChange={(event) => setForm({ ...form, costPerUnit: Number(event.target.value) })} className={`mt-1 ${inputClass}`} /></label>
+            <label className="text-xs font-semibold text-slate-600">Unused stock behavior<select value={form.wasteBehavior} onChange={(event) => setForm({ ...form, wasteBehavior: event.target.value as InventoryInput['wasteBehavior'] })} className={`mt-1 ${inputClass}`}><option value="carry_forward">Can carry over</option><option value="perishable">Perishable</option></select></label>
+            <button disabled={saving} className="min-h-11 rounded-xl bg-slate-900 px-4 text-sm font-bold text-white disabled:opacity-50 sm:col-span-2 lg:col-span-3">{saving ? 'Saving…' : editing ? 'Save ingredient' : 'Add ingredient'}</button>
+        </form>}
 
-            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-                {summaryCards.map((card) => <div key={card.label} className="min-w-0 rounded-2xl border border-slate-200/70 bg-white p-3 sm:p-5"><div className={`inline-flex rounded-xl p-2 ${card.tone}`}><card.icon className="h-5 w-5" /></div><p className="mt-3 break-words text-xl font-bold text-slate-900 sm:text-2xl">{card.value}</p><p className="text-xs text-slate-500">{card.label}</p></div>)}
-            </div>
-
-            {needsRestock.length > 0 && (
-                <div role="alert" className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
-                    <ExclamationTriangleIcon className="h-5 w-5 shrink-0" />
-                    <div>
-                        <p className="text-sm font-bold">Low stock alert</p>
-                        <p className="mt-1 text-sm">{needsRestock.slice(0, 6).map((item) => `${item.name}: ${item.currentStock} ${item.unit}`).join(' · ')}{needsRestock.length > 6 ? ` · and ${needsRestock.length - 6} more` : ''}</p>
-                        <p className="mt-1 text-xs text-amber-800">These items are at or below their reorder level.</p>
-                    </div>
-                </div>
-            )}
-
-            {showForm && (
-                <section className="rounded-2xl border border-sky-200 bg-white p-4 shadow-sm sm:p-5">
-                    <div className="mb-5 flex items-start justify-between gap-3"><div><h2 className="font-bold text-slate-900">{editing ? 'Edit inventory item' : 'Add inventory item'}</h2><p className="text-xs text-slate-500">Stock changes after creation are recorded through Adjust Stock.</p></div><button onClick={() => setShowForm(false)} className="min-h-10 shrink-0 rounded-lg px-2 text-sm font-semibold text-slate-500">Close</button></div>
-                    <form onSubmit={save} className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                        <label className="text-xs font-semibold text-slate-600">Item name<input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={`mt-1.5 ${inputClass}`} /></label>
-                        <label className="text-xs font-semibold text-slate-600">SKU / Code<input value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} className={`mt-1.5 ${inputClass}`} /></label>
-                        <label className="text-xs font-semibold text-slate-600">Category<input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className={`mt-1.5 ${inputClass}`} /></label>
-                        <label className="text-xs font-semibold text-slate-600">Unit<select disabled={!!editing && !!usageByInventoryItem[editing._id]?.length} value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} className={`mt-1.5 ${inputClass} disabled:cursor-not-allowed disabled:bg-slate-100`}>{units.map((unit) => <option key={unit}>{unit}</option>)}</select>{!!editing && !!usageByInventoryItem[editing._id]?.length && <span className="mt-1 block font-normal text-slate-400">This unit is used by menu recipes.</span>}</label>
-                        {!editing && <label className="text-xs font-semibold text-slate-600">Opening stock<input type="number" min="0" step="0.0001" value={form.currentStock} onChange={(e) => setForm({ ...form, currentStock: Number(e.target.value) })} className={`mt-1.5 ${inputClass}`} /></label>}
-                        <label className="text-xs font-semibold text-slate-600">Reorder at<input type="number" min="0" step="0.0001" value={form.reorderLevel} onChange={(e) => setForm({ ...form, reorderLevel: Number(e.target.value) })} className={`mt-1.5 ${inputClass}`} /></label>
-                        <label className="text-xs font-semibold text-slate-600">Cost per unit (₹)<input type="number" min="0" step="0.01" value={form.costPerUnit} onChange={(e) => setForm({ ...form, costPerUnit: Number(e.target.value) })} className={`mt-1.5 ${inputClass}`} /></label>
-                        <label className="text-xs font-semibold text-slate-600">Supplier<input value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} className={`mt-1.5 ${inputClass}`} /></label>
-                        <label className="text-xs font-semibold text-slate-600 md:col-span-2 lg:col-span-3">Notes<input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} className={`mt-1.5 ${inputClass}`} /></label>
-                        <div className="flex items-end"><button disabled={saving} className="h-11 w-full rounded-xl bg-slate-900 px-5 text-sm font-bold text-white disabled:opacity-50">{saving ? 'Saving…' : editing ? 'Save changes' : 'Add item'}</button></div>
-                    </form>
-                </section>
-            )}
-
-            <section className="overflow-hidden rounded-2xl border border-slate-200/70 bg-white">
-                <div className="flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row">
-                    <div className="relative flex-1"><MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-slate-400" /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search item, SKU, category, or supplier" className="h-10 w-full rounded-xl border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-sky-400" /></div>
-                    <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">{(['all', 'low', 'out'] as const).map((filter) => <button key={filter} onClick={() => setStockFilter(filter)} className={`min-h-10 shrink-0 rounded-xl px-3 py-2 text-xs font-bold capitalize ${stockFilter === filter ? 'bg-sky-100 text-sky-700' : 'bg-slate-50 text-slate-500'}`}>{filter === 'all' ? 'All stock' : filter === 'low' ? 'Low stock' : 'Out of stock'}</button>)}</div>
-                </div>
-                {!filtered.length ? <p className="p-12 text-center text-sm text-slate-400">No inventory items match this view.</p> : (
-                    <>
-                    <div className="divide-y divide-slate-100 md:hidden">{filtered.map((item) => {
-                        const status = item.currentStock === 0 ? 'out' : item.currentStock <= item.reorderLevel ? 'low' : 'ok';
-                        return <article key={item._id} className="space-y-3 p-4">
-                            <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="break-words font-semibold text-slate-900">{item.name}</p><p className="break-words text-xs text-slate-500">{item.category}{item.sku ? ` · ${item.sku}` : ''}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${status === 'out' ? 'bg-red-50 text-red-700' : status === 'low' ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'}`}>{item.currentStock} {item.unit}</span></div>
-                            <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs"><div><dt className="text-slate-400">Reorder at</dt><dd className="mt-0.5 font-medium text-slate-700">{item.reorderLevel} {item.unit}</dd></div><div><dt className="text-slate-400">Cost / unit</dt><dd className="mt-0.5 font-medium text-slate-700">{formatCurrency(item.costPerUnit)}</dd></div><div><dt className="text-slate-400">Stock value</dt><dd className="mt-0.5 font-semibold text-slate-800">{formatCurrency(item.currentStock * item.costPerUnit)}</dd></div><div className="min-w-0"><dt className="text-slate-400">Supplier</dt><dd className="mt-0.5 break-words font-medium text-slate-700">{item.supplier || '—'}</dd></div></dl>
-                            <p className="break-words text-xs text-slate-500">{usageByInventoryItem[item._id]?.length ? `Used in: ${usageByInventoryItem[item._id].join(', ')}` : 'Not linked to a menu item yet'}</p>
-                            <div className="grid grid-cols-[1fr_1fr_auto] gap-2 border-t border-slate-100 pt-3"><button onClick={() => { setAdjusting(item); setAdjustment({ type: 'purchase', quantity: '', note: '', unitCost: String(item.costPerUnit) }); }} className="min-h-10 rounded-lg bg-sky-50 px-2 text-xs font-bold text-sky-700">Adjust stock</button><button onClick={() => openEdit(item)} className="min-h-10 rounded-lg bg-slate-100 px-2 text-xs font-bold text-slate-700">Edit</button><button onClick={() => archive(item)} aria-label={`Archive ${item.name}`} className="flex min-h-10 min-w-10 items-center justify-center rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"><TrashIcon className="h-4 w-4" /></button></div>
-                        </article>;
-                    })}</div>
-                    <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[1050px] text-left text-sm"><thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500"><tr><th className="px-5 py-3">Item</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Reorder level</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Value</th><th className="px-4 py-3">Menu use</th><th className="px-4 py-3">Supplier</th><th className="px-5 py-3 text-right">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{filtered.map((item) => {
-                        const status = item.currentStock === 0 ? 'out' : item.currentStock <= item.reorderLevel ? 'low' : 'ok';
-                        const menuUse = usageByInventoryItem[item._id] || [];
-                        return <tr key={item._id} className="hover:bg-slate-50/60"><td className="px-5 py-4"><p className="font-semibold text-slate-900">{item.name}</p><p className="text-[11px] text-slate-400">{item.category}{item.sku ? ` · ${item.sku}` : ''}</p></td><td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${status === 'out' ? 'bg-red-50 text-red-700' : status === 'low' ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'}`}>{item.currentStock} {item.unit}</span></td><td className="px-4 py-4 text-slate-600">{item.reorderLevel} {item.unit}</td><td className="px-4 py-4 text-slate-600">{formatCurrency(item.costPerUnit)}</td><td className="px-4 py-4 font-semibold text-slate-800">{formatCurrency(item.currentStock * item.costPerUnit)}</td><td className="max-w-52 px-4 py-4 text-xs text-slate-500">{menuUse.length ? menuUse.join(', ') : 'Not linked'}</td><td className="px-4 py-4 text-slate-500">{item.supplier || '—'}</td><td className="px-5 py-4"><div className="flex justify-end gap-2"><button onClick={() => { setAdjusting(item); setAdjustment({ type: 'purchase', quantity: '', note: '', unitCost: String(item.costPerUnit) }); }} className="rounded-lg bg-sky-50 px-3 py-2 text-xs font-bold text-sky-700">Adjust</button><button onClick={() => openEdit(item)} className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700">Edit</button><button onClick={() => archive(item)} aria-label={`Archive ${item.name}`} className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"><TrashIcon className="h-4 w-4" /></button></div></td></tr>;
-                    })}</tbody></table></div>
-                    </>
-                )}
-            </section>
-
-            <section className="rounded-2xl border border-slate-200/70 bg-white p-5">
-                <h2 className="font-bold text-slate-900">Recent stock activity</h2>
-                <div className="mt-4 space-y-2">{!initialMovements.length ? <p className="py-7 text-center text-sm text-slate-400">Stock movements will appear here.</p> : initialMovements.slice(0, 20).map((movement) => {
-                    const item = typeof movement.inventoryItemId === 'string' ? null : movement.inventoryItemId;
-                    return <div key={movement._id} className="flex items-start justify-between gap-3 rounded-xl bg-slate-50 px-3 py-3 sm:items-center sm:px-4"><div className="flex min-w-0 items-start gap-3 sm:items-center">{movement.quantity >= 0 ? <ArrowUpTrayIcon className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 sm:mt-0" /> : <ArrowDownTrayIcon className="mt-0.5 h-4 w-4 shrink-0 text-red-500 sm:mt-0" />}<div className="min-w-0"><p className="break-words text-sm font-semibold text-slate-800">{item?.name || 'Archived item'} · <span className="capitalize">{movement.type}</span></p><p className="break-words text-[11px] text-slate-400">{movement.note || 'No note'} · {formatDate(movement.createdAt)}</p></div></div><p className={`shrink-0 text-right text-sm font-bold ${movement.quantity >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{movement.quantity >= 0 ? '+' : ''}{movement.quantity} {item?.unit || ''}<span className="ml-2 block text-[10px] font-normal text-slate-400 sm:inline">→ {movement.stockAfter}</span></p></div>;
-                })}</div>
-            </section>
-
-            {adjusting && <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4 backdrop-blur-sm"><form onSubmit={saveAdjustment} className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-3xl bg-white p-4 shadow-2xl sm:p-6"><div className="flex justify-between gap-3"><div className="min-w-0"><h2 className="break-words text-xl font-bold text-slate-900">Adjust {adjusting.name}</h2><p className="mt-1 text-xs text-slate-500">Current stock: {adjusting.currentStock} {adjusting.unit}</p></div><button type="button" onClick={() => setAdjusting(null)} className="min-h-10 shrink-0 rounded-lg px-2 text-sm font-semibold text-slate-500">Close</button></div><div className="mt-5 space-y-4"><label className="block text-xs font-semibold text-slate-600">Movement<select value={adjustment.type} onChange={(e) => setAdjustment({ ...adjustment, type: e.target.value })} className={`mt-1.5 ${inputClass}`}><option value="purchase">Purchase / Stock in</option><option value="usage">Kitchen usage</option><option value="wastage">Wastage</option><option value="return">Return to stock</option><option value="correction">Manual correction (+ or -)</option></select></label><label className="block text-xs font-semibold text-slate-600">Quantity ({adjusting.unit})<input required type="number" step="0.0001" value={adjustment.quantity} onChange={(e) => setAdjustment({ ...adjustment, quantity: e.target.value })} className={`mt-1.5 ${inputClass}`} placeholder={adjustment.type === 'correction' ? 'Use negative to reduce stock' : 'Enter quantity'} /></label>{adjustment.type === 'purchase' && <label className="block text-xs font-semibold text-slate-600">New cost per unit (₹)<input type="number" min="0" step="0.01" value={adjustment.unitCost} onChange={(e) => setAdjustment({ ...adjustment, unitCost: e.target.value })} className={`mt-1.5 ${inputClass}`} /></label>}<label className="block text-xs font-semibold text-slate-600">Note<input value={adjustment.note} onChange={(e) => setAdjustment({ ...adjustment, note: e.target.value })} className={`mt-1.5 ${inputClass}`} placeholder="Invoice, reason, or reference" /></label><button disabled={saving} className="h-12 w-full rounded-xl bg-sky-500 font-bold text-white disabled:opacity-50">{saving ? 'Updating…' : 'Update stock'}</button></div></form></div>}
-        </div>
-    );
+        <div className="relative"><MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-slate-400" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search ingredients" className="min-h-10 w-full rounded-xl border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-sky-400" /></div>
+        {!filtered.length ? <p className="rounded-xl bg-slate-50 p-8 text-center text-sm text-slate-500">{initialItems.length ? 'No ingredients match this search.' : 'No ingredients yet. Add the ingredients used by your menu.'}</p> : <div className="divide-y divide-slate-100">{filtered.map((item) => <article key={item._id} className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold text-slate-900">{item.name}</h3><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600">{item.category}</span><span className="text-xs text-slate-500">{item.unit}</span></div><p className="mt-1 text-xs text-slate-500">{usageByInventoryItem[item._id]?.length ? `Used in: ${usageByInventoryItem[item._id].join(', ')}` : 'Not linked to a menu recipe yet'}</p></div><div className="flex shrink-0 gap-2"><button onClick={() => openEdit(item)} className="min-h-9 rounded-lg bg-slate-100 px-3 text-xs font-bold text-slate-700">Edit</button><button onClick={() => archive(item)} aria-label={`Archive ${item.name}`} className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600"><TrashIcon className="h-4 w-4" /></button></div></article>)}</div>}
+    </section>;
 }

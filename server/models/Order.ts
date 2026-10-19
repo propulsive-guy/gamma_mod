@@ -38,7 +38,7 @@ export interface IOrder extends Document {
     tableId: mongoose.Types.ObjectId;
     orderType: 'dine-in' | 'takeaway';
     items: IOrderItem[];
-    inventoryUsage: { inventoryItemId: mongoose.Types.ObjectId; quantity: number; unitCost: number }[];
+    inventoryUsage: { inventoryItemId: mongoose.Types.ObjectId; departmentId?: mongoose.Types.ObjectId; quantity: number; unitCost: number }[];
     inventoryRestored: boolean;
     inventoryDeducted?: boolean;
     total: number;
@@ -118,6 +118,7 @@ const orderSchema = new Schema<IOrder>(
         inventoryUsage: {
             type: [{
                 inventoryItemId: { type: Schema.Types.ObjectId, ref: 'InventoryItem', required: true },
+                departmentId: { type: Schema.Types.ObjectId, ref: 'KitchenDepartment' },
                 quantity: { type: Number, required: true, min: 0 },
                 unitCost: { type: Number, required: true, min: 0 },
             }],

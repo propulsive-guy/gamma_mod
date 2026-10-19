@@ -36,7 +36,7 @@ export default function LowStockAlerts({ restaurantId }: { restaurantId?: string
                     <div className="min-w-0 flex-1">
                         <p className="text-sm font-bold text-slate-900">{newlyCritical.some((item) => item.currentStock === 0) ? 'Stock alert' : 'Low stock alert'}</p>
                         <p className="mt-1 text-sm text-slate-600">{names}{extra} {newlyCritical.length === 1 ? 'needs' : 'need'} restocking.</p>
-                        <Link href="/dashboard/inventory" onClick={() => toast.dismiss(t.id)} className="mt-2 inline-block text-xs font-bold text-amber-700 hover:underline">View inventory</Link>
+                        <Link href="/dashboard/store" onClick={() => toast.dismiss(t.id)} className="mt-2 inline-block text-xs font-bold text-amber-700 hover:underline">Review suggested vendor order</Link>
                     </div>
                     <button type="button" onClick={() => toast.dismiss(t.id)} aria-label="Dismiss low stock alert" className="text-sm text-slate-400 hover:text-slate-700">✕</button>
                 </div>

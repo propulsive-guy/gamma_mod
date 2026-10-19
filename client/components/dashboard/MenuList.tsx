@@ -20,10 +20,12 @@ interface MenuItem {
     isAvailable: boolean;
     dietaryType?: 'veg' | 'non-veg' | 'vegan' | 'egg' | 'unknown';
     itemType?: 'food' | 'beverage' | 'water' | 'other';
+    departmentId?: string;
     recipe?: { inventoryItemId: string; quantity: number }[];
 }
 
 interface InventoryOption { _id: string; name: string; unit: string; currentStock: number }
+interface DepartmentOption { _id: string; name: string }
 
 const recipeInputUnit = (stockUnit: string) => stockUnit === 'kg' ? 'g' : stockUnit === 'l' ? 'ml' : stockUnit;
 const recipeInputScale = (stockUnit: string) => stockUnit === 'kg' || stockUnit === 'l' ? 1000 : 1;
@@ -32,7 +34,7 @@ const displayRecipeQuantity = (quantity: number, stockUnit: string) => {
     return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(3)));
 };
 
-export function MenuList({ initialMenuItems, inventoryItems }: { initialMenuItems: MenuItem[]; inventoryItems: InventoryOption[] }) {
+export function MenuList({ initialMenuItems, inventoryItems, departments }: { initialMenuItems: MenuItem[]; inventoryItems: InventoryOption[]; departments: DepartmentOption[] }) {
     const [showAddForm, setShowAddForm] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -46,6 +48,7 @@ export function MenuList({ initialMenuItems, inventoryItems }: { initialMenuItem
         aestheticImageUrl: '',
         dietaryType: 'unknown',
         itemType: 'food',
+        departmentId: '',
     });
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -148,7 +151,7 @@ export function MenuList({ initialMenuItems, inventoryItems }: { initialMenuItem
 
             if (result.success) {
                 toast.success(editingId ? 'Menu item updated successfully!' : 'Menu item added successfully!');
-                setFormData({ name: '', description: '', price: '', category: '', imageUrl: '', aestheticImageUrl: '', dietaryType: 'unknown', itemType: 'food' });
+                setFormData({ name: '', description: '', price: '', category: '', imageUrl: '', aestheticImageUrl: '', dietaryType: 'unknown', itemType: 'food', departmentId: '' });
                 setRecipe([]);
                 setSelectedFile(null);
                 setImagePreview(null);
@@ -179,6 +182,7 @@ export function MenuList({ initialMenuItems, inventoryItems }: { initialMenuItem
             aestheticImageUrl: item.aestheticImageUrl || '',
             dietaryType: item.dietaryType || 'unknown',
             itemType: item.itemType || 'food',
+            departmentId: item.departmentId || '',
         });
         setImagePreview(item.imageUrl || null);
         setAestheticImagePreview(item.aestheticImageUrl || null);
@@ -242,8 +246,8 @@ export function MenuList({ initialMenuItems, inventoryItems }: { initialMenuItem
     const filteredGroupedItems = Object.entries(groupedItems).filter(([category]) =>
         selectedCategory === 'All' ? true : category === selectedCategory
     );
-    const linkedMenuItems = initialMenuItems.filter((item) => item.recipe?.length && item.recipe.every((part) => inventoryItems.some((inventoryItem) => inventoryItem._id === part.inventoryItemId)));
-    const unlinkedMenuItems = initialMenuItems.filter((item) => !item.recipe?.length || !item.recipe.every((part) => inventoryItems.some((inventoryItem) => inventoryItem._id === part.inventoryItemId)));
+    const linkedMenuItems = initialMenuItems.filter((item) => item.departmentId && item.recipe?.length && item.recipe.every((part) => inventoryItems.some((inventoryItem) => inventoryItem._id === part.inventoryItemId)));
+    const unlinkedMenuItems = initialMenuItems.filter((item) => !item.departmentId || !item.recipe?.length || !item.recipe.every((part) => inventoryItems.some((inventoryItem) => inventoryItem._id === part.inventoryItemId)));
 
     return (
         <div className="space-y-8">
@@ -251,7 +255,7 @@ export function MenuList({ initialMenuItems, inventoryItems }: { initialMenuItem
             <section className="flex flex-col gap-4 rounded-2xl border border-sky-200 bg-sky-50 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
                 <div>
                     <h2 className="font-bold text-slate-900">Automatic inventory deduction</h2>
-                    <p className="mt-1 max-w-3xl text-sm text-slate-600">Edit a dish and add the ingredients used for one serving. For example, set Paneer Butter Masala to use 100 g paneer. We convert grams to your stock unit, and deduct it when the order is marked Served.</p>
+                    <p className="mt-1 max-w-3xl text-sm text-slate-600">Assign each dish to the department that prepares it and add its ingredients per serving. Stock is reserved from that department when an order is placed and returned if the order is cancelled.</p>
                     <p className="mt-2 text-xs font-semibold text-slate-700">{linkedMenuItems.length} of {initialMenuItems.length} menu items linked · {unlinkedMenuItems.length} still need setup</p>
                 </div>
                 {unlinkedMenuItems.length > 0 && !showAddForm && (
@@ -287,7 +291,7 @@ export function MenuList({ initialMenuItems, inventoryItems }: { initialMenuItem
                         if (showAddForm && editingId) {
                             setEditingId(null);
                             setRecipe([]);
-                            setFormData({ name: '', description: '', price: '', category: '', imageUrl: '', aestheticImageUrl: '', dietaryType: 'unknown', itemType: 'food' });
+                            setFormData({ name: '', description: '', price: '', category: '', imageUrl: '', aestheticImageUrl: '', dietaryType: 'unknown', itemType: 'food', departmentId: '' });
                             setImagePreview(null);
                             setSelectedFile(null);
                             setSelectedAestheticFile(null);
@@ -297,7 +301,7 @@ export function MenuList({ initialMenuItems, inventoryItems }: { initialMenuItem
                             if (!showAddForm) {
                                 setEditingId(null);
                                 setRecipe([]);
-                                setFormData({ name: '', description: '', price: '', category: '', imageUrl: '', aestheticImageUrl: '', dietaryType: 'unknown', itemType: 'food' });
+                                setFormData({ name: '', description: '', price: '', category: '', imageUrl: '', aestheticImageUrl: '', dietaryType: 'unknown', itemType: 'food', departmentId: '' });
                                 setImagePreview(null);
                                 setSelectedFile(null);
                                 setSelectedAestheticFile(null);
@@ -392,7 +396,8 @@ export function MenuList({ initialMenuItems, inventoryItems }: { initialMenuItem
                             </div>
                         </div>
 
-                        <div className="rounded-xl border border-sky-100 bg-sky-50/40 p-4">
+                            <div className="rounded-xl border border-sky-100 bg-sky-50/40 p-4">
+                            <label className="mb-3 block text-sm font-semibold text-gray-900">Preparing department<select required={recipe.length > 0} value={formData.departmentId} onChange={(event) => setFormData({ ...formData, departmentId: event.target.value })} className="mt-1.5 h-11 w-full rounded-xl border border-sky-100 bg-white px-3 text-sm text-gray-900"><option value="">Select department</option>{departments.map((department) => <option key={department._id} value={department._id}>{department.name}</option>)}</select>{!departments.length && <Link href="/dashboard/inventory" className="mt-1 inline-block text-xs font-normal text-amber-700 underline">Open Kitchen Inventory to create departments.</Link>}</label>
                             <h3 className="text-sm font-semibold text-gray-900">Ingredients for one serving</h3>
                             <p className="mt-1 text-xs text-gray-500">Add each stock item and how much goes into one dish. Example: Paneer Butter Masala → Paneer → 100 g.</p>
                             <div className="mt-3 space-y-2">
@@ -405,7 +410,7 @@ export function MenuList({ initialMenuItems, inventoryItems }: { initialMenuItem
                                             <select aria-label="Ingredient" required value={entry.inventoryItemId} onChange={(event) => setRecipe(recipe.map((part, partIndex) => partIndex === index ? { inventoryItemId: event.target.value, quantity: 0 } : part))} className="min-w-44 flex-1 rounded-lg border border-sky-100 bg-white px-3 py-2 text-sm text-gray-900">
                                                 <option value="">Select inventory item</option>
                                                 {!stock && entry.inventoryItemId && <option value={entry.inventoryItemId}>Archived inventory item</option>}
-                                                {inventoryItems.map((item) => <option key={item._id} value={item._id} disabled={recipe.some((part, partIndex) => partIndex !== index && part.inventoryItemId === item._id)}>{item.name} · {item.currentStock} {item.unit} available</option>)}
+                                                {inventoryItems.map((item) => <option key={item._id} value={item._id} disabled={recipe.some((part, partIndex) => partIndex !== index && part.inventoryItemId === item._id)}>{item.name} · {item.currentStock} {item.unit} in store</option>)}
                                             </select>
                                             <input aria-label={`Amount per serving in ${inputUnit || 'stock units'}`} type="number" min={inputScale === 1000 ? '1' : '0.0001'} step={inputScale === 1000 ? '1' : '0.0001'} required value={stock && entry.quantity ? displayRecipeQuantity(entry.quantity, stock.unit) : ''} onChange={(event) => setRecipe(recipe.map((part, partIndex) => partIndex === index ? { ...part, quantity: Number(event.target.value) / inputScale } : part))} placeholder="Amount" className="w-28 rounded-lg border border-sky-100 bg-white px-3 py-2 text-sm text-gray-900" />
                                             <span className="w-12 text-xs font-semibold text-gray-600">{inputUnit}</span>
@@ -469,7 +474,7 @@ export function MenuList({ initialMenuItems, inventoryItems }: { initialMenuItem
                                 type="button"
                                 variant="ghost"
                                 onClick={() => {
-                                    setFormData({ name: '', description: '', price: '', category: '', imageUrl: '', aestheticImageUrl: '', dietaryType: 'unknown', itemType: 'food' });
+                                    setFormData({ name: '', description: '', price: '', category: '', imageUrl: '', aestheticImageUrl: '', dietaryType: 'unknown', itemType: 'food', departmentId: '' });
                                     setRecipe([]);
                                     setSelectedFile(null);
                                     setImagePreview(null);
@@ -529,12 +534,14 @@ export function MenuList({ initialMenuItems, inventoryItems }: { initialMenuItem
                                             <div className="flex flex-wrap gap-1.5 pt-1">
                                                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold capitalize text-slate-600">{item.dietaryType === 'non-veg' ? 'Non-Veg' : item.dietaryType || 'Unknown'}</span>
                                                 <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold capitalize text-sky-700">{item.itemType || 'food'}</span>
+                                                {item.departmentId && <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-700">{departments.find((department) => department._id === item.departmentId)?.name || 'Department unavailable'}</span>}
                                             </div>
                                             {!!item.recipe?.length && <p className="pt-1 text-xs text-slate-500">Per serving: {item.recipe.map((part) => {
                                                 const stock = inventoryItems.find((entry) => entry._id === part.inventoryItemId);
                                                 return `${stock ? displayRecipeQuantity(part.quantity, stock.unit) : part.quantity} ${stock ? recipeInputUnit(stock.unit) : ''} ${stock?.name || 'archived item'}`;
                                             }).join(' · ')}</p>}
                                             {!item.recipe?.length && <p className="pt-1 text-xs text-amber-700">Inventory not linked</p>}
+                                            {!!item.recipe?.length && !item.departmentId && <p className="pt-1 text-xs text-amber-700">Assign a kitchen department to enable stock tracking.</p>}
                                         </div>
                                     </div>
 

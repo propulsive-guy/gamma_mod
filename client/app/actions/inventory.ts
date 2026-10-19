@@ -8,6 +8,7 @@ import InventoryItem, { INVENTORY_UNITS, type InventoryUnit } from '@/models/Inv
 import MenuItem from '@/models/MenuItem';
 import StockMovement, { type IStockMovement } from '@/models/StockMovement';
 import { apiFetch } from '@/client-lib/api';
+import { ensureLowStockPurchaseDrafts } from '@/lib/lowStockProcurement';
 
 export type InventoryInput = {
     name: string;
@@ -19,6 +20,7 @@ export type InventoryInput = {
     costPerUnit: number;
     supplier: string;
     notes: string;
+    wasteBehavior: 'carry_forward' | 'perishable';
 };
 
 const finiteNonNegative = (value: unknown) => Number.isFinite(Number(value)) && Number(value) >= 0;
@@ -39,6 +41,7 @@ export async function applyInventoryBillPurchase(data: {
         const result = await response.json().catch(() => ({}));
         if (!response.ok) return { success: false, error: result.error || 'Could not apply bill' };
         revalidatePath('/dashboard/inventory');
+        revalidatePath('/dashboard/store');
         return { success: true, updated: result.updated as number };
     } catch (error: any) {
         console.error('Apply inventory bill error:', error);
@@ -56,9 +59,11 @@ async function restaurantContext() {
 export async function getLowStockItems() {
     try {
         const { restaurantId } = await restaurantContext();
+        await ensureLowStockPurchaseDrafts(restaurantId);
         const items = await InventoryItem.find({
             restaurantId,
             isActive: true,
+            reorderLevel: { $gt: 0 },
             $expr: { $lte: ['$currentStock', '$reorderLevel'] },
         }).select('name unit currentStock reorderLevel').sort({ currentStock: 1, name: 1 }).lean();
         return { success: true as const, items: JSON.parse(JSON.stringify(items)) as {
@@ -90,7 +95,7 @@ export async function createInventoryItem(data: InventoryInput) {
             restaurantId, name: data.name.trim(), sku: data.sku,
             category: data.category?.trim() || 'General', unit: data.unit as InventoryUnit,
             currentStock: rounded(data.currentStock), reorderLevel: rounded(data.reorderLevel),
-            costPerUnit: rounded(data.costPerUnit), supplier: data.supplier, notes: data.notes,
+            costPerUnit: rounded(data.costPerUnit), supplier: data.supplier, notes: data.notes, wasteBehavior: data.wasteBehavior || 'carry_forward',
         });
         if (item.currentStock > 0) {
             await StockMovement.create({
@@ -123,7 +128,7 @@ export async function updateInventoryItem(id: string, data: InventoryInput) {
             {
                 name: data.name.trim(), sku: data.sku, category: data.category?.trim() || 'General',
                 unit: data.unit as InventoryUnit, reorderLevel: rounded(data.reorderLevel), costPerUnit: rounded(data.costPerUnit),
-                supplier: data.supplier, notes: data.notes,
+                supplier: data.supplier, notes: data.notes, wasteBehavior: data.wasteBehavior || 'carry_forward',
             },
             { new: true, runValidators: true },
         );
@@ -149,15 +154,21 @@ export async function adjustInventoryStock(id: string, data: { type: string; qua
         const filter: any = { _id: id, restaurantId, isActive: true };
         if (delta < 0) filter.currentStock = { $gte: Math.abs(delta) };
         const update: any = { $inc: { currentStock: delta } };
-        if (data.type === 'purchase' && finiteNonNegative(data.unitCost)) update.$set = { costPerUnit: rounded(data.unitCost) };
         const before = await InventoryItem.findOneAndUpdate(filter, update, { runValidators: true });
         if (!before) return { success: false, error: 'Not enough stock, or the item no longer exists' };
         const stockAfter = rounded(before.currentStock + delta);
+        const purchaseCost = data.type === 'purchase' && finiteNonNegative(data.unitCost) ? rounded(data.unitCost) : before.costPerUnit;
+        if (data.type === 'purchase' && finiteNonNegative(data.unitCost)) {
+            const averageCost = stockAfter > 0
+                ? rounded(((before.currentStock * before.costPerUnit) + (delta * purchaseCost)) / stockAfter)
+                : purchaseCost;
+            await InventoryItem.updateOne({ _id: before._id, restaurantId }, { $set: { costPerUnit: averageCost } });
+        }
         try {
             await StockMovement.create({
                 restaurantId, inventoryItemId: before._id, type: data.type as IStockMovement['type'], quantity: delta,
                 stockBefore: before.currentStock, stockAfter,
-                unitCost: data.type === 'purchase' && finiteNonNegative(data.unitCost) ? rounded(data.unitCost) : before.costPerUnit,
+                unitCost: purchaseCost,
                 note: data.note,
             });
         } catch (movementError) {

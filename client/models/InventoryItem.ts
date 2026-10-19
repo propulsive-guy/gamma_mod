@@ -14,6 +14,7 @@ export interface IInventoryItem extends Document {
     costPerUnit: number;
     supplier?: string;
     notes?: string;
+    wasteBehavior: 'carry_forward' | 'perishable';
     isActive: boolean;
 }
 
@@ -28,6 +29,7 @@ const inventoryItemSchema = new Schema<IInventoryItem>({
     costPerUnit: { type: Number, required: true, min: 0, default: 0 },
     supplier: { type: String, trim: true, maxlength: 120, default: '' },
     notes: { type: String, trim: true, maxlength: 500, default: '' },
+    wasteBehavior: { type: String, enum: ['carry_forward', 'perishable'], default: 'carry_forward' },
     isActive: { type: Boolean, default: true },
 }, { timestamps: true });
 

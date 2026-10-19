@@ -55,16 +55,18 @@ export class InventoryController {
                         }
                     }
                     if (!inventoryItemId) throw new Error('Choose an existing item or provide a name for the new item.');
-                    const before = await InventoryItem.findOneAndUpdate(
-                        { _id: inventoryItemId, restaurantId: req.user!.restaurantId, isActive: true, unit: line.unit },
-                        { $inc: { currentStock: line.quantity }, $set: { costPerUnit: line.unitCost } },
-                        { session, runValidators: true },
-                    );
+                    const before = await InventoryItem.findOne({ _id: inventoryItemId, restaurantId: req.user!.restaurantId, isActive: true, unit: line.unit }).session(session);
                     if (!before) throw new Error('An inventory item was not found or its unit does not match. No changes were saved.');
                     const stockAfter = rounded(before.currentStock + line.quantity);
+                    const averageCost = stockAfter > 0
+                        ? rounded(((before.currentStock * before.costPerUnit) + (line.quantity * line.unitCost)) / stockAfter)
+                        : line.unitCost;
+                    before.currentStock = stockAfter;
+                    before.costPerUnit = averageCost;
+                    await before.save({ session });
                     await StockMovement.create([{
                         restaurantId: req.user!.restaurantId, inventoryItemId: before._id, type: 'purchase',
-                        quantity: line.quantity, stockBefore: before.currentStock, stockAfter,
+                        quantity: line.quantity, stockBefore: rounded(stockAfter - line.quantity), stockAfter,
                         unitCost: line.unitCost, note: note ? `Bill ${note}` : 'Scanned supplier bill', createdBy: req.user!.id,
                     }], { session });
                 }
@@ -107,7 +109,7 @@ export class InventoryController {
     static async create(req: Request, res: Response) {
         try {
             if (!req.user?.restaurantId) return res.status(401).json({ error: 'Unauthorized' });
-            const { name, sku, category, unit, currentStock, reorderLevel, costPerUnit, supplier, notes } = req.body || {};
+            const { name, sku, category, unit, currentStock, reorderLevel, costPerUnit, supplier, notes, wasteBehavior } = req.body || {};
             if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'Item name is required' });
             if (!INVENTORY_UNITS.includes(unit)) return res.status(400).json({ error: 'Choose a valid unit' });
             if (![currentStock, reorderLevel, costPerUnit].every(finiteNonNegative)) return res.status(400).json({ error: 'Stock, reorder level, and cost must be zero or greater' });
@@ -116,7 +118,7 @@ export class InventoryController {
                 restaurantId: req.user.restaurantId,
                 name: name.trim(), sku, category: String(category || 'General').trim() || 'General', unit,
                 currentStock: rounded(currentStock), reorderLevel: rounded(reorderLevel), costPerUnit: rounded(costPerUnit),
-                supplier, notes,
+                supplier, notes, wasteBehavior: wasteBehavior === 'perishable' ? 'perishable' : 'carry_forward',
             });
             if (item.currentStock > 0) {
                 await StockMovement.create({
@@ -138,7 +140,7 @@ export class InventoryController {
             if (!req.user?.restaurantId) return res.status(401).json({ error: 'Unauthorized' });
             const id = req.params.id as string;
             if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ error: 'Invalid inventory item' });
-            const { name, sku, category, unit, reorderLevel, costPerUnit, supplier, notes } = req.body || {};
+            const { name, sku, category, unit, reorderLevel, costPerUnit, supplier, notes, wasteBehavior } = req.body || {};
             if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'Item name is required' });
             if (!INVENTORY_UNITS.includes(unit)) return res.status(400).json({ error: 'Choose a valid unit' });
             if (![reorderLevel, costPerUnit].every(finiteNonNegative)) return res.status(400).json({ error: 'Reorder level and cost must be zero or greater' });
@@ -149,7 +151,7 @@ export class InventoryController {
             }
             const item = await InventoryItem.findOneAndUpdate(
                 { _id: id, restaurantId: req.user.restaurantId, isActive: true },
-                { name: name.trim(), sku, category: String(category || 'General').trim() || 'General', unit, reorderLevel: rounded(reorderLevel), costPerUnit: rounded(costPerUnit), supplier, notes },
+                { name: name.trim(), sku, category: String(category || 'General').trim() || 'General', unit, reorderLevel: rounded(reorderLevel), costPerUnit: rounded(costPerUnit), supplier, notes, wasteBehavior: wasteBehavior === 'perishable' ? 'perishable' : 'carry_forward' },
                 { new: true, runValidators: true },
             );
             if (!item) return res.status(404).json({ error: 'Inventory item not found' });
@@ -176,14 +178,20 @@ export class InventoryController {
             const filter: any = { _id: id, restaurantId: req.user.restaurantId, isActive: true };
             if (delta < 0) filter.currentStock = { $gte: Math.abs(delta) };
             const update: any = { $inc: { currentStock: delta } };
-            if (type === 'purchase' && finiteNonNegative(unitCost)) update.$set = { costPerUnit: rounded(unitCost) };
             const before = await InventoryItem.findOneAndUpdate(filter, update, { runValidators: true });
             if (!before) return res.status(409).json({ error: 'Not enough stock, or the item no longer exists' });
             const afterStock = rounded(before.currentStock + delta);
+            const purchaseCost = type === 'purchase' && finiteNonNegative(unitCost) ? rounded(unitCost) : before.costPerUnit;
+            if (type === 'purchase' && finiteNonNegative(unitCost)) {
+                const averageCost = afterStock > 0
+                    ? rounded(((before.currentStock * before.costPerUnit) + (delta * purchaseCost)) / afterStock)
+                    : purchaseCost;
+                await InventoryItem.updateOne({ _id: before._id, restaurantId: req.user.restaurantId }, { $set: { costPerUnit: averageCost } });
+            }
             await StockMovement.create({
                 restaurantId: req.user.restaurantId, inventoryItemId: before._id, type, quantity: delta,
                 stockBefore: before.currentStock, stockAfter: afterStock,
-                unitCost: type === 'purchase' && finiteNonNegative(unitCost) ? rounded(unitCost) : before.costPerUnit,
+                unitCost: purchaseCost,
                 note, createdBy: req.user.id,
             });
             const item = await InventoryItem.findById(before._id);

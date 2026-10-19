@@ -11,6 +11,7 @@ export interface IMenuItem extends Document {
     itemType: 'food' | 'beverage' | 'water' | 'other';
     isAvailable: boolean;
     recipe: { inventoryItemId: mongoose.Types.ObjectId; quantity: number }[];
+    departmentId?: mongoose.Types.ObjectId;
     restaurantId: mongoose.Types.ObjectId;
     createdAt: Date;
     updatedAt: Date;
@@ -67,6 +68,7 @@ const menuItemSchema = new Schema<IMenuItem>(
             }],
             default: [],
         },
+        departmentId: { type: Schema.Types.ObjectId, ref: 'KitchenDepartment' },
         restaurantId: {
             type: Schema.Types.ObjectId,
             ref: 'Restaurant',

@@ -3,8 +3,12 @@ import { redirect } from 'next/navigation';
 import dbConnect from '@/lib/db';
 import InventoryItem from '@/models/InventoryItem';
 import MenuItem from '@/models/MenuItem';
-import StockMovement from '@/models/StockMovement';
+import KitchenDepartment from '@/models/KitchenDepartment';
+import KitchenStock from '@/models/KitchenStock';
+import { processKitchenStockExpiry } from '@/lib/kitchenStockLots';
+import ProcurementDocument from '@/models/ProcurementDocument';
 import { InventoryManager } from '@/components/dashboard/InventoryManager';
+import KitchenInventoryWorkflow from '@/components/dashboard/KitchenInventoryWorkflow';
 
 export const maxDuration = 60;
 
@@ -13,18 +17,16 @@ export default async function InventoryPage() {
     if (!session?.user.restaurantId) redirect('/auth/signin');
     await dbConnect();
     const restaurantId = session.user.restaurantId;
-    const [items, movements, menuItems] = await Promise.all([
+    await processKitchenStockExpiry(restaurantId);
+    const [items, menuItems, departments, kitchenStocks, requisitions] = await Promise.all([
         InventoryItem.find({ restaurantId, isActive: true })
-            .select('name sku category unit currentStock reorderLevel costPerUnit supplier isActive createdAt updatedAt')
+            .select('name sku category unit currentStock reorderLevel costPerUnit supplier notes wasteBehavior isActive')
             .sort({ category: 1, name: 1 })
             .lean(),
-        StockMovement.find({ restaurantId })
-            .select('inventoryItemId type quantity stockBefore stockAfter note createdAt')
-            .sort({ createdAt: -1 })
-            .limit(60)
-            .populate('inventoryItemId', 'name unit')
-            .lean(),
         MenuItem.find({ restaurantId }).select('name recipe').lean(),
+        KitchenDepartment.find({ restaurantId, isActive: true }).sort({ name: 1 }).lean(),
+        KitchenStock.find({ restaurantId }).lean(),
+        ProcurementDocument.find({ restaurantId, type: 'requisition' }).sort({ createdAt: -1 }).limit(30).select('reference status departmentId createdAt').lean(),
     ]);
     const activeInventoryIds = new Set(items.map((item) => String(item._id)));
     const inventoryUnits = new Map(items.map((item) => [String(item._id), item.unit]));
@@ -46,10 +48,20 @@ export default async function InventoryPage() {
         total: menuItems.length,
         linked: menuItems.filter((item) => item.recipe?.length && item.recipe.every((ingredient) => activeInventoryIds.has(String(ingredient.inventoryItemId)))).length,
     };
-    return <InventoryManager
+    return <div className="space-y-6">
+        <KitchenInventoryWorkflow
+            items={JSON.parse(JSON.stringify(items.map(({ _id, name, unit, currentStock }) => ({ _id, name, unit, storeAvailableStock: currentStock }))))}
+            departments={JSON.parse(JSON.stringify(departments.map((department) => ({ _id: String(department._id), name: department.name }))))}
+            stocks={JSON.parse(JSON.stringify(kitchenStocks.map((stock) => ({
+                _id: String(stock._id), departmentId: String(stock.departmentId),
+                inventoryItemId: String(stock.inventoryItemId), currentStock: Number(stock.currentStock),
+            }))))}
+            requests={JSON.parse(JSON.stringify(requisitions))}
+        />
+        <InventoryManager
         initialItems={JSON.parse(JSON.stringify(items))}
-        initialMovements={JSON.parse(JSON.stringify(movements))}
         usageByInventoryItem={usageByInventoryItem}
         menuSetup={menuSetup}
-    />;
+        />
+    </div>;
 }

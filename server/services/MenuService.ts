@@ -1,5 +1,6 @@
 import MenuItem, { IMenuItem } from '@/models/MenuItem';
 import InventoryItem from '@/models/InventoryItem';
+import KitchenDepartment from '@/models/KitchenDepartment';
 import mongoose from 'mongoose';
 
 export class MenuService {
@@ -15,6 +16,13 @@ export class MenuService {
      * Add or update an item
      */
     static async upsertItem(restaurantId: string, data: Partial<IMenuItem>): Promise<IMenuItem> {
+        if ((data as any).departmentId === '') (data as any).departmentId = null;
+        if (data.departmentId && !await KitchenDepartment.exists({ _id: data.departmentId, restaurantId, isActive: true })) {
+            throw new Error('Choose an active kitchen department for this menu item');
+        }
+        if (Array.isArray(data.recipe) && data.recipe.length && !data.departmentId) {
+            throw new Error('Assign a kitchen department before linking ingredients');
+        }
         if (data.recipe !== undefined) {
             if (!Array.isArray(data.recipe)) throw new Error('Invalid inventory recipe');
             const ids = new Set<string>();

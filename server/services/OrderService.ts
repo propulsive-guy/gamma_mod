@@ -2,8 +2,11 @@ import Order, { IOrder } from '@/models/Order';
 import MenuItem from '@/models/MenuItem';
 import InventoryItem from '@/models/InventoryItem';
 import StockMovement from '@/models/StockMovement';
+import KitchenStock from '@/models/KitchenStock';
+import KitchenStockLot from '@/models/KitchenStockLot';
 import Table from '@/models/Table';
 import mongoose from 'mongoose';
+import { consumeKitchenLots, createKitchenLot, expireDueKitchenLots, seedLegacyKitchenLots } from '../../shared/kitchenStockLots';
 
 export class OrderInputError extends Error {}
 
@@ -34,6 +37,8 @@ export class OrderService {
         let createdOrder: IOrder | null = null;
         try {
             await session.withTransaction(async () => {
+                await seedLegacyKitchenLots({ Lot: KitchenStockLot, KitchenStock, InventoryItem }, data.restaurantId, session);
+                await expireDueKitchenLots({ Lot: KitchenStockLot, KitchenStock, StockMovement }, data.restaurantId, session);
                 const table = await Table.findOne({ _id: data.tableId, restaurantId: data.restaurantId, isActive: true }).session(session);
                 if (!table) throw new Error('This ordering QR is unavailable');
 
@@ -43,15 +48,21 @@ export class OrderService {
                     isAvailable: true,
                 }).session(session);
                 const byId = new Map(menuItems.map((item) => [String(item._id), item]));
-                const required = new Map<string, number>();
+                const required = new Map<string, { departmentId: mongoose.Types.ObjectId; inventoryItemId: mongoose.Types.ObjectId; quantity: number }>();
                 let calculatedTotal = 0;
                 const orderItems = data.items.map((item: any) => {
                     const dbItem = byId.get(String(item.menuItemId));
                     if (!dbItem) throw new Error('A menu item is unavailable. Please refresh the menu.');
                     calculatedTotal += dbItem.price * item.quantity;
                     for (const part of dbItem.recipe || []) {
-                        const id = String(part.inventoryItemId);
-                        required.set(id, (required.get(id) || 0) + part.quantity * item.quantity);
+                        if (!dbItem.departmentId) throw new OrderInputError(`Set a kitchen department for ${dbItem.name} in Menu before accepting orders.`);
+                        const key = `${dbItem.departmentId}:${part.inventoryItemId}`;
+                        const existing = required.get(key);
+                        required.set(key, {
+                            departmentId: dbItem.departmentId,
+                            inventoryItemId: part.inventoryItemId,
+                            quantity: (existing?.quantity || 0) + part.quantity * item.quantity,
+                        });
                     }
                     return {
                         menuItemId: dbItem._id,
@@ -77,27 +88,46 @@ export class OrderService {
                     notes,
                 }], { session });
 
-                // Snapshot the recipe and ingredient costs with the order, but
-                // do not change stock until staff marks it served. This keeps
-                // the stock movement aligned with food leaving the kitchen.
-                const requiredIds = [...required.keys()];
+                // Reserve recipe quantities from the assigned kitchen department
+                // when the order is placed. Cancellation restores the same stock.
+                const requiredIds = [...new Set([...required.values()].map((part) => String(part.inventoryItemId)))];
                 const stockItems = requiredIds.length
                     ? await InventoryItem.find({
                         _id: { $in: requiredIds }, restaurantId: data.restaurantId, isActive: true,
                     }).session(session)
                     : [];
                 const stockById = new Map(stockItems.map((item) => [String(item._id), item]));
-                const usage = [...required].sort(([a], [b]) => a.localeCompare(b)).map(([inventoryItemId, rawQuantity]) => {
-                    const inventoryItem = stockById.get(inventoryItemId);
-                    if (!inventoryItem) throw new Error('A linked ingredient is unavailable. Please update the menu recipe.');
+                const usage = [...required.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, part]) => {
+                    const inventoryItem = stockById.get(String(part.inventoryItemId));
+                    if (!inventoryItem) throw new OrderInputError('A linked ingredient is unavailable. Please update the menu recipe.');
                     return {
                         inventoryItemId: inventoryItem._id,
-                        quantity: Math.round(rawQuantity * 10000) / 10000,
+                        departmentId: part.departmentId,
+                        quantity: Math.round(part.quantity * 10000) / 10000,
                         unitCost: inventoryItem.costPerUnit,
                     };
                 });
                 order.inventoryUsage = usage;
-                order.inventoryDeducted = false;
+                for (const part of usage) {
+                    const quantity = Math.round(part.quantity * 10000) / 10000;
+                    const before = await KitchenStock.findOneAndUpdate(
+                        { restaurantId: data.restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId, currentStock: { $gte: quantity } },
+                        { $inc: { currentStock: -quantity } },
+                        { session },
+                    );
+                    if (!before) {
+                        const ingredient = stockById.get(String(part.inventoryItemId));
+                        throw new Error(`Not enough kitchen stock for ${ingredient?.name || 'an ingredient'}. Ask the store for a department requisition.`);
+                    }
+                    await consumeKitchenLots(KitchenStockLot, { restaurantId: data.restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId }, quantity, session);
+                    await StockMovement.create([{
+                        restaurantId: data.restaurantId, inventoryItemId: part.inventoryItemId, departmentId: part.departmentId, orderId: order._id,
+                        type: 'usage', quantity: -quantity, stockBefore: before.currentStock,
+                        stockAfter: Math.round((before.currentStock - quantity) * 10000) / 10000,
+                        unitCost: part.unitCost, note: `Reserved for order ${order._id}`,
+                    }], { session });
+                }
+                order.inventoryDeducted = usage.length > 0;
                 await order.save({ session });
                 createdOrder = order;
             });
@@ -200,6 +230,24 @@ export class OrderService {
 
                 if (status === 'cancelled' && order.status !== 'cancelled' && inventoryWasDeducted && !order.inventoryRestored) {
                     for (const part of order.inventoryUsage || []) {
+                        if (part.departmentId) {
+                            const after = await KitchenStock.findOneAndUpdate(
+                                { restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId },
+                                { $inc: { currentStock: part.quantity }, $setOnInsert: { restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId } },
+                                { session, new: true, upsert: true, setDefaultsOnInsert: true },
+                            );
+                            const inventoryItem = await InventoryItem.findOne({ _id: part.inventoryItemId, restaurantId }).select('wasteBehavior').session(session);
+                            await createKitchenLot(KitchenStockLot, {
+                                restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId,
+                                quantity: part.quantity, wasteBehavior: inventoryItem?.wasteBehavior || 'carry_forward', unitCost: part.unitCost,
+                            }, session);
+                            await StockMovement.create([{
+                                restaurantId, inventoryItemId: part.inventoryItemId, departmentId: part.departmentId, orderId: order._id,
+                                type: 'return', quantity: part.quantity, stockBefore: after.currentStock - part.quantity,
+                                stockAfter: after.currentStock, unitCost: part.unitCost, note: `Cancelled order ${order._id}`,
+                            }], { session });
+                            continue;
+                        }
                         const before = await InventoryItem.findOneAndUpdate(
                             { _id: part.inventoryItemId, restaurantId },
                             { $inc: { currentStock: part.quantity } },

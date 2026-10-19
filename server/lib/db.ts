@@ -9,6 +9,9 @@ import '../models/MenuItem';
 import '../models/Order';
 import '../models/InventoryItem';
 import '../models/StockMovement';
+import '../models/KitchenDepartment';
+import '../models/KitchenStock';
+import '../models/KitchenStockLot';
 
 // Apply DNS fix at module load time (covers Express process)
 try {
