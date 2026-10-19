@@ -53,6 +53,7 @@ interface RestaurantInfo {
     colorScheme?: string;
     upiId?: string;
     upiPayeeName?: string;
+    merchantCode?: string;
     fssaiNumber?: string;
     gstPercentage?: number;
     sgstPercentage?: number;
@@ -349,7 +350,7 @@ export default function OrderStatusPage() {
                             <h1 className="mt-2 text-3xl font-bold tracking-tight">{isTakeaway ? 'Ready to take away? Let us settle up.' : 'Enjoyed your meal? Let us settle up.'}</h1>
                             <p className="mt-2 max-w-lg text-sm text-white/70">Payment for order #{paymentOrder._id.slice(-6).toUpperCase()} at {restaurant?.name || 'your restaurant'}.</p>
                         </div>
-                        <UPIPaymentSection restaurant={restaurant} amount={paymentOrder.checkout.payableAmount} accent={accent} />
+                        <UPIPaymentSection restaurant={restaurant} amount={paymentOrder.checkout.payableAmount} orderId={paymentOrder._id} accent={accent} />
                         <div className="rounded-[26px] border border-zinc-200 bg-white p-6 text-sm shadow-sm">
                             <h2 className="font-bold">Payment summary</h2>
                             <div className="mt-4 space-y-2 text-zinc-500">
@@ -645,11 +646,38 @@ function RatingInput({ label, value, onChange, accent }: { label: string; value:
     );
 }
 
-function UPIPaymentSection({ restaurant, amount, accent }: { restaurant: RestaurantInfo | null; amount: number; accent: string }) {
+function UPIPaymentSection({ restaurant, amount, orderId, accent }: { restaurant: RestaurantInfo | null; amount: number; orderId: string; accent: string }) {
     const [qrCodeData, setQrCodeData] = useState('');
+    const [launchHint, setLaunchHint] = useState('');
     const payee = restaurant?.upiId?.trim();
     const payeeName = restaurant?.upiPayeeName?.trim() || restaurant?.name?.trim() || '';
-    const upiUrl = payee ? 'upi://pay?pa=' + encodeURIComponent(payee) + '&pn=' + encodeURIComponent(payeeName) + '&am=' + amount.toFixed(2) + '&cu=INR' : '';
+    const merchantCode = restaurant?.merchantCode?.trim();
+    const transactionNote = `Order ${orderId.slice(-6).toUpperCase()} ${restaurant?.name?.trim() || ''}`.slice(0, 80).trim();
+    const upiParams = new URLSearchParams({
+        pa: payee || '',
+        pn: payeeName,
+        tr: orderId,
+        tn: transactionNote,
+        am: amount.toFixed(2),
+        cu: 'INR',
+    });
+    if (merchantCode && /^\d{4}$/.test(merchantCode) && merchantCode !== '0000') {
+        upiParams.set('mc', merchantCode);
+    }
+    const upiUrl = payee ? `upi://pay?${upiParams.toString()}` : '';
+    const upiQuery = upiUrl.split('?')[1] || '';
+    const androidIntentUrl = upiQuery ? `intent://pay?${upiQuery}#Intent;scheme=upi;end` : '';
+    const googlePayUrl = upiQuery ? `gpay://upi/pay?${upiQuery}` : '';
+
+    const openUPIApp = () => {
+        if (!upiUrl) return;
+        const userAgent = navigator.userAgent;
+        const isIOS = /iPhone|iPad|iPod/i.test(userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        const isAndroid = /Android/i.test(userAgent);
+        const targetUrl = isIOS ? googlePayUrl : isAndroid ? androidIntentUrl : upiUrl;
+        setLaunchHint('If your payment app does not open, use the standard UPI link below or scan the QR code.');
+        window.location.assign(targetUrl);
+    };
 
     useEffect(() => {
         if (!upiUrl) return;
@@ -675,7 +703,9 @@ function UPIPaymentSection({ restaurant, amount, accent }: { restaurant: Restaur
             </div>
             <p className="mt-4 text-2xl font-bold">{formatCurrency(amount)}</p>
             <p className="mt-1 text-xs text-zinc-500">Paying {payeeName} · {payee}</p>
-            <a href={upiUrl} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl px-5 py-3.5 text-sm font-bold" style={{ backgroundColor: accent, color: contrastTextColor(accent) }}>Open UPI app <ArrowRightIcon className="h-4 w-4" /></a>
+            <button type="button" onClick={openUPIApp} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl px-5 py-3.5 text-sm font-bold" style={{ backgroundColor: accent, color: contrastTextColor(accent) }}>Open UPI app <ArrowRightIcon className="h-4 w-4" /></button>
+            <a href={upiUrl} className="mt-3 inline-flex min-h-11 items-center justify-center rounded-xl px-4 text-xs font-semibold text-zinc-600 underline underline-offset-4">Try the standard UPI link</a>
+            {launchHint && <p role="status" className="mt-1 text-xs text-zinc-500">{launchHint}</p>}
             <p className="mt-3 text-xs text-zinc-400">Your restaurant will confirm the payment after you complete it in your UPI app.</p>
         </div>
     );
