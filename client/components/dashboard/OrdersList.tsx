@@ -156,7 +156,7 @@ export function OrdersList({ initialOrders, restaurant }: { initialOrders: Order
         if (result.success) {
             toast.success('Order status updated');
         } else {
-            toast.error('Failed to update status');
+            toast.error(result.error || 'Failed to update status');
             const refresh = await getOrders();
             if (refresh.success && refresh.data) {
                 setOrders(refresh.data);

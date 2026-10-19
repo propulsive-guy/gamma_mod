@@ -7,6 +7,7 @@ import { createMenuItem, deleteMenuItem, toggleMenuItemAvailability, updateMenuI
 import { toast } from 'react-hot-toast';
 import { PlusIcon, TrashIcon, PencilIcon } from '@heroicons/react/24/outline';
 import { MenuPhotoImporter } from './MenuPhotoImporter';
+import Link from 'next/link';
 
 interface MenuItem {
     _id: string;
@@ -23,6 +24,13 @@ interface MenuItem {
 }
 
 interface InventoryOption { _id: string; name: string; unit: string; currentStock: number }
+
+const recipeInputUnit = (stockUnit: string) => stockUnit === 'kg' ? 'g' : stockUnit === 'l' ? 'ml' : stockUnit;
+const recipeInputScale = (stockUnit: string) => stockUnit === 'kg' || stockUnit === 'l' ? 1000 : 1;
+const displayRecipeQuantity = (quantity: number, stockUnit: string) => {
+    const value = quantity * recipeInputScale(stockUnit);
+    return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(3)));
+};
 
 export function MenuList({ initialMenuItems, inventoryItems }: { initialMenuItems: MenuItem[]; inventoryItems: InventoryOption[] }) {
     const [showAddForm, setShowAddForm] = useState(false);
@@ -234,10 +242,23 @@ export function MenuList({ initialMenuItems, inventoryItems }: { initialMenuItem
     const filteredGroupedItems = Object.entries(groupedItems).filter(([category]) =>
         selectedCategory === 'All' ? true : category === selectedCategory
     );
+    const linkedMenuItems = initialMenuItems.filter((item) => item.recipe?.length && item.recipe.every((part) => inventoryItems.some((inventoryItem) => inventoryItem._id === part.inventoryItemId)));
+    const unlinkedMenuItems = initialMenuItems.filter((item) => !item.recipe?.length || !item.recipe.every((part) => inventoryItems.some((inventoryItem) => inventoryItem._id === part.inventoryItemId)));
 
     return (
         <div className="space-y-8">
             <MenuPhotoImporter />
+            <section className="flex flex-col gap-4 rounded-2xl border border-sky-200 bg-sky-50 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                <div>
+                    <h2 className="font-bold text-slate-900">Automatic inventory deduction</h2>
+                    <p className="mt-1 max-w-3xl text-sm text-slate-600">Edit a dish and add the ingredients used for one serving. For example, set Paneer Butter Masala to use 100 g paneer. We convert grams to your stock unit, and deduct it when the order is marked Served.</p>
+                    <p className="mt-2 text-xs font-semibold text-slate-700">{linkedMenuItems.length} of {initialMenuItems.length} menu items linked · {unlinkedMenuItems.length} still need setup</p>
+                </div>
+                {unlinkedMenuItems.length > 0 && !showAddForm && (
+                    <button type="button" onClick={() => handleEdit(unlinkedMenuItems[0])} className="min-h-11 shrink-0 rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-700">Set up next dish: {unlinkedMenuItems[0].name}</button>
+                )}
+                {!inventoryItems.length && <Link href="/dashboard/inventory" className="min-h-11 shrink-0 rounded-xl border border-sky-300 bg-white px-4 py-2.5 text-center text-sm font-bold text-sky-700 hover:bg-sky-100">Add stock items first</Link>}
+            </section>
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm animate-in fade-in duration-300">
                 <div className="flex flex-wrap gap-2 max-w-full overflow-x-auto no-scrollbar py-1">
                     {categories.map((category) => (
@@ -372,21 +393,24 @@ export function MenuList({ initialMenuItems, inventoryItems }: { initialMenuItem
                         </div>
 
                         <div className="rounded-xl border border-sky-100 bg-sky-50/40 p-4">
-                            <h3 className="text-sm font-semibold text-gray-900">Inventory used per item</h3>
-                            <p className="mt-1 text-xs text-gray-500">Enter the amount used to make one serving. Orders multiply these amounts by the quantity ordered.</p>
+                            <h3 className="text-sm font-semibold text-gray-900">Ingredients for one serving</h3>
+                            <p className="mt-1 text-xs text-gray-500">Add each stock item and how much goes into one dish. Example: Paneer Butter Masala → Paneer → 100 g.</p>
                             <div className="mt-3 space-y-2">
                                 {recipe.map((entry, index) => {
                                     const stock = inventoryItems.find((item) => item._id === entry.inventoryItemId);
+                                    const inputUnit = stock ? recipeInputUnit(stock.unit) : '';
+                                    const inputScale = stock ? recipeInputScale(stock.unit) : 1;
                                     return (
                                         <div key={`${entry.inventoryItemId}-${index}`} className="flex flex-wrap items-center gap-2">
-                                            <select aria-label="Inventory item" required value={entry.inventoryItemId} onChange={(event) => setRecipe(recipe.map((part, partIndex) => partIndex === index ? { ...part, inventoryItemId: event.target.value } : part))} className="min-w-44 flex-1 rounded-lg border border-sky-100 bg-white px-3 py-2 text-sm text-gray-900">
+                                            <select aria-label="Ingredient" required value={entry.inventoryItemId} onChange={(event) => setRecipe(recipe.map((part, partIndex) => partIndex === index ? { inventoryItemId: event.target.value, quantity: 0 } : part))} className="min-w-44 flex-1 rounded-lg border border-sky-100 bg-white px-3 py-2 text-sm text-gray-900">
                                                 <option value="">Select inventory item</option>
                                                 {!stock && entry.inventoryItemId && <option value={entry.inventoryItemId}>Archived inventory item</option>}
-                                                {inventoryItems.map((item) => <option key={item._id} value={item._id} disabled={recipe.some((part, partIndex) => partIndex !== index && part.inventoryItemId === item._id)}>{item.name} ({item.unit})</option>)}
+                                                {inventoryItems.map((item) => <option key={item._id} value={item._id} disabled={recipe.some((part, partIndex) => partIndex !== index && part.inventoryItemId === item._id)}>{item.name} · {item.currentStock} {item.unit} available</option>)}
                                             </select>
-                                            <input aria-label={`Quantity per order in ${stock?.unit || 'stock units'}`} type="number" min="0.0001" step="0.0001" required value={entry.quantity || ''} onChange={(event) => setRecipe(recipe.map((part, partIndex) => partIndex === index ? { ...part, quantity: Number(event.target.value) } : part))} className="w-28 rounded-lg border border-sky-100 bg-white px-3 py-2 text-sm text-gray-900" />
-                                            <span className="w-12 text-xs text-gray-600">{stock?.unit || ''}</span>
+                                            <input aria-label={`Amount per serving in ${inputUnit || 'stock units'}`} type="number" min={inputScale === 1000 ? '1' : '0.0001'} step={inputScale === 1000 ? '1' : '0.0001'} required value={stock && entry.quantity ? displayRecipeQuantity(entry.quantity, stock.unit) : ''} onChange={(event) => setRecipe(recipe.map((part, partIndex) => partIndex === index ? { ...part, quantity: Number(event.target.value) / inputScale } : part))} placeholder="Amount" className="w-28 rounded-lg border border-sky-100 bg-white px-3 py-2 text-sm text-gray-900" />
+                                            <span className="w-12 text-xs font-semibold text-gray-600">{inputUnit}</span>
                                             <button type="button" aria-label="Remove inventory item" onClick={() => setRecipe(recipe.filter((_, partIndex) => partIndex !== index))} className="rounded-lg p-2 text-red-500 hover:bg-red-50"><TrashIcon className="h-4 w-4" /></button>
+                                            {stock && inputUnit !== stock.unit && <span className="w-full pl-1 text-[11px] text-slate-500">Enter {inputUnit}; inventory stock is tracked in {stock.unit}.</span>}
                                         </div>
                                     );
                                 })}
@@ -506,9 +530,9 @@ export function MenuList({ initialMenuItems, inventoryItems }: { initialMenuItem
                                                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold capitalize text-slate-600">{item.dietaryType === 'non-veg' ? 'Non-Veg' : item.dietaryType || 'Unknown'}</span>
                                                 <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold capitalize text-sky-700">{item.itemType || 'food'}</span>
                                             </div>
-                                            {!!item.recipe?.length && <p className="pt-1 text-xs text-slate-500">Inventory per item: {item.recipe.map((part) => {
+                                            {!!item.recipe?.length && <p className="pt-1 text-xs text-slate-500">Per serving: {item.recipe.map((part) => {
                                                 const stock = inventoryItems.find((entry) => entry._id === part.inventoryItemId);
-                                                return `${part.quantity} ${stock?.unit || ''} ${stock?.name || 'archived item'}`;
+                                                return `${stock ? displayRecipeQuantity(part.quantity, stock.unit) : part.quantity} ${stock ? recipeInputUnit(stock.unit) : ''} ${stock?.name || 'archived item'}`;
                                             }).join(' · ')}</p>}
                                             {!item.recipe?.length && <p className="pt-1 text-xs text-amber-700">Inventory not linked</p>}
                                         </div>

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import InventoryItem, { INVENTORY_UNITS } from '../models/InventoryItem';
+import MenuItem from '../models/MenuItem';
 import StockMovement, { StockMovementType } from '../models/StockMovement';
 
 const movementTypes: StockMovementType[] = ['purchase', 'usage', 'wastage', 'correction', 'return'];
@@ -141,6 +142,11 @@ export class InventoryController {
             if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'Item name is required' });
             if (!INVENTORY_UNITS.includes(unit)) return res.status(400).json({ error: 'Choose a valid unit' });
             if (![reorderLevel, costPerUnit].every(finiteNonNegative)) return res.status(400).json({ error: 'Reorder level and cost must be zero or greater' });
+            const existing = await InventoryItem.findOne({ _id: id, restaurantId: req.user.restaurantId, isActive: true }).select('unit').lean();
+            if (!existing) return res.status(404).json({ error: 'Inventory item not found' });
+            if (existing.unit !== unit && await MenuItem.exists({ restaurantId: req.user.restaurantId, 'recipe.inventoryItemId': id })) {
+                return res.status(409).json({ error: 'This unit is used in menu recipes. Keep it unchanged, or update those recipes before changing the stock unit.' });
+            }
             const item = await InventoryItem.findOneAndUpdate(
                 { _id: id, restaurantId: req.user.restaurantId, isActive: true },
                 { name: name.trim(), sku, category: String(category || 'General').trim() || 'General', unit, reorderLevel: rounded(reorderLevel), costPerUnit: rounded(costPerUnit), supplier, notes },

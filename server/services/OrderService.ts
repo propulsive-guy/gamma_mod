@@ -77,24 +77,27 @@ export class OrderService {
                     notes,
                 }], { session });
 
-                const usage = [];
-                for (const [inventoryItemId, rawQuantity] of [...required].sort(([a], [b]) => a.localeCompare(b))) {
-                    const quantity = Math.round(rawQuantity * 10000) / 10000;
-                    const before = await InventoryItem.findOneAndUpdate(
-                        { _id: inventoryItemId, restaurantId: data.restaurantId, isActive: true, currentStock: { $gte: quantity } },
-                        { $inc: { currentStock: -quantity } },
-                        { session },
-                    );
-                    if (!before) throw new Error('An ingredient is unavailable or has insufficient stock. Please contact the restaurant.');
-                    usage.push({ inventoryItemId: before._id, quantity, unitCost: before.costPerUnit });
-                    await StockMovement.create([{
-                        restaurantId: data.restaurantId, inventoryItemId: before._id, orderId: order._id,
-                        type: 'usage', quantity: -quantity, stockBefore: before.currentStock,
-                        stockAfter: Math.round((before.currentStock - quantity) * 10000) / 10000,
-                        unitCost: before.costPerUnit, note: `Order ${order._id}`,
-                    }], { session });
-                }
+                // Snapshot the recipe and ingredient costs with the order, but
+                // do not change stock until staff marks it served. This keeps
+                // the stock movement aligned with food leaving the kitchen.
+                const requiredIds = [...required.keys()];
+                const stockItems = requiredIds.length
+                    ? await InventoryItem.find({
+                        _id: { $in: requiredIds }, restaurantId: data.restaurantId, isActive: true,
+                    }).session(session)
+                    : [];
+                const stockById = new Map(stockItems.map((item) => [String(item._id), item]));
+                const usage = [...required].sort(([a], [b]) => a.localeCompare(b)).map(([inventoryItemId, rawQuantity]) => {
+                    const inventoryItem = stockById.get(inventoryItemId);
+                    if (!inventoryItem) throw new Error('A linked ingredient is unavailable. Please update the menu recipe.');
+                    return {
+                        inventoryItemId: inventoryItem._id,
+                        quantity: Math.round(rawQuantity * 10000) / 10000,
+                        unitCost: inventoryItem.costPerUnit,
+                    };
+                });
                 order.inventoryUsage = usage;
+                order.inventoryDeducted = false;
                 await order.save({ session });
                 createdOrder = order;
             });
@@ -165,10 +168,37 @@ export class OrderService {
         try {
             await session.withTransaction(async () => {
                 const order = await Order.findOne({ _id: orderId, restaurantId })
-                    .select('+inventoryUsage +inventoryRestored').session(session);
+                    .select('+inventoryUsage +inventoryRestored +inventoryDeducted').session(session);
                 if (!order) return;
                 if (order.status === 'cancelled' && status !== 'cancelled') throw new Error('Cancelled orders cannot be reopened');
-                if (status === 'cancelled' && order.status !== 'cancelled' && !order.inventoryRestored) {
+                const legacyOrderAlreadyDeducted = order.inventoryDeducted === undefined && (order.inventoryUsage || []).length > 0;
+                const inventoryWasDeducted = order.inventoryDeducted === true || legacyOrderAlreadyDeducted;
+
+                if ((status === 'served' || status === 'completed') && order.inventoryDeducted === undefined) {
+                    // Older orders deducted stock at placement. Preserve their
+                    // historic accounting and never charge those recipes twice.
+                    order.inventoryDeducted = true;
+                } else if ((status === 'served' || status === 'completed') && order.inventoryDeducted === false) {
+                    for (const part of [...(order.inventoryUsage || [])].sort((a, b) => String(a.inventoryItemId).localeCompare(String(b.inventoryItemId)))) {
+                        const quantity = Math.round(part.quantity * 10000) / 10000;
+                        const before = await InventoryItem.findOneAndUpdate(
+                            { _id: part.inventoryItemId, restaurantId, isActive: true, currentStock: { $gte: quantity } },
+                            { $inc: { currentStock: -quantity } },
+                            { session },
+                        );
+                        if (!before) throw new Error('Not enough stock to serve this order. Check the inventory quantity and recipe, then try again.');
+                        part.unitCost = before.costPerUnit;
+                        await StockMovement.create([{
+                            restaurantId, inventoryItemId: before._id, orderId: order._id,
+                            type: 'usage', quantity: -quantity, stockBefore: before.currentStock,
+                            stockAfter: Math.round((before.currentStock - quantity) * 10000) / 10000,
+                            unitCost: before.costPerUnit, note: `Served order ${order._id}`,
+                        }], { session });
+                    }
+                    order.inventoryDeducted = true;
+                }
+
+                if (status === 'cancelled' && order.status !== 'cancelled' && inventoryWasDeducted && !order.inventoryRestored) {
                     for (const part of order.inventoryUsage || []) {
                         const before = await InventoryItem.findOneAndUpdate(
                             { _id: part.inventoryItemId, restaurantId },

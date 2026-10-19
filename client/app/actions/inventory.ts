@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { auth } from '@/lib/auth';
 import dbConnect from '@/lib/db';
 import InventoryItem, { INVENTORY_UNITS, type InventoryUnit } from '@/models/InventoryItem';
+import MenuItem from '@/models/MenuItem';
 import StockMovement, { type IStockMovement } from '@/models/StockMovement';
 import { apiFetch } from '@/client-lib/api';
 
@@ -112,6 +113,11 @@ export async function updateInventoryItem(id: string, data: InventoryInput) {
         if (!mongoose.Types.ObjectId.isValid(id)) return { success: false, error: 'Invalid inventory item' };
         const validationError = validateInput(data, false);
         if (validationError) return { success: false, error: validationError };
+        const existing = await InventoryItem.findOne({ _id: id, restaurantId, isActive: true }).select('unit').lean();
+        if (!existing) return { success: false, error: 'Inventory item not found' };
+        if (existing.unit !== data.unit && await MenuItem.exists({ restaurantId, 'recipe.inventoryItemId': id })) {
+            return { success: false, error: 'This unit is used in menu recipes. Keep it unchanged, or update those recipes before changing the stock unit.' };
+        }
         const item = await InventoryItem.findOneAndUpdate(
             { _id: id, restaurantId, isActive: true },
             {

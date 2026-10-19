@@ -18,7 +18,6 @@ export default async function MenuPage() {
 
     const [menuItems, inventoryItems] = await Promise.all([
         MenuItem.find({ restaurantId: session.user.restaurantId })
-            .select('-imageUrl -aestheticImageUrl')
             .sort({ category: 1, createdAt: -1 }).lean(),
         InventoryItem.find({ restaurantId: session.user.restaurantId, isActive: true })
             .select('name unit currentStock').sort({ name: 1 }).lean(),
@@ -31,7 +30,7 @@ export default async function MenuPage() {
                     Menu Management
                 </h1>
                 <p className="text-gray-600 mt-1">
-                    Manage your restaurant menu items
+                    Manage dishes, then set ingredients used per serving to track stock automatically.
                 </p>
             </div>
 

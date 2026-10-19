@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { toast } from 'react-hot-toast';
 import {
     AdjustmentsHorizontalIcon, ArchiveBoxIcon, ArrowDownTrayIcon, ArrowUpTrayIcon,
@@ -35,7 +36,17 @@ const emptyForm: InventoryInput = {
 };
 const units = ['kg', 'g', 'l', 'ml', 'piece', 'pack', 'box', 'bottle', 'can'];
 
-export function InventoryManager({ initialItems, initialMovements }: { initialItems: InventoryItem[]; initialMovements: Movement[] }) {
+export function InventoryManager({
+    initialItems,
+    initialMovements,
+    usageByInventoryItem,
+    menuSetup,
+}: {
+    initialItems: InventoryItem[];
+    initialMovements: Movement[];
+    usageByInventoryItem: Record<string, string[]>;
+    menuSetup: { total: number; linked: number };
+}) {
     const router = useRouter();
     const [showForm, setShowForm] = useState(false);
     const [editing, setEditing] = useState<InventoryItem | null>(null);
@@ -116,6 +127,15 @@ export function InventoryManager({ initialItems, initialMovements }: { initialIt
                 <button onClick={openNew} className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-sky-600"><PlusIcon className="h-5 w-5" /> Add inventory item</button>
             </div>
 
+            <section className="flex flex-col gap-4 rounded-2xl border border-sky-200 bg-sky-50 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                <div>
+                    <h2 className="font-bold text-slate-900">Connect dishes to ingredients</h2>
+                    <p className="mt-1 max-w-3xl text-sm text-slate-600">Inventory categories only help organize stock. To deduct ingredients automatically, set the amount used for one serving in Menu. Example: Paneer Butter Masala → Paneer → 100 g. We convert g to kg when needed and deduct stock when an order is marked Served.</p>
+                    <p className="mt-2 text-xs font-semibold text-slate-700">{menuSetup.linked} of {menuSetup.total} menu items linked · {Math.max(0, menuSetup.total - menuSetup.linked)} still need setup</p>
+                </div>
+                <Link href="/dashboard/menu" className="inline-flex min-h-11 shrink-0 items-center justify-center rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-700">Set up menu ingredients</Link>
+            </section>
+
             <InventoryBillScanner items={initialItems.map(({ _id, name, unit, currentStock, costPerUnit }) => ({ _id, name, unit, currentStock, costPerUnit }))} />
 
             <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -140,7 +160,7 @@ export function InventoryManager({ initialItems, initialMovements }: { initialIt
                         <label className="text-xs font-semibold text-slate-600">Item name<input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={`mt-1.5 ${inputClass}`} /></label>
                         <label className="text-xs font-semibold text-slate-600">SKU / Code<input value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} className={`mt-1.5 ${inputClass}`} /></label>
                         <label className="text-xs font-semibold text-slate-600">Category<input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className={`mt-1.5 ${inputClass}`} /></label>
-                        <label className="text-xs font-semibold text-slate-600">Unit<select value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} className={`mt-1.5 ${inputClass}`}>{units.map((unit) => <option key={unit}>{unit}</option>)}</select></label>
+                        <label className="text-xs font-semibold text-slate-600">Unit<select disabled={!!editing && !!usageByInventoryItem[editing._id]?.length} value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} className={`mt-1.5 ${inputClass} disabled:cursor-not-allowed disabled:bg-slate-100`}>{units.map((unit) => <option key={unit}>{unit}</option>)}</select>{!!editing && !!usageByInventoryItem[editing._id]?.length && <span className="mt-1 block font-normal text-slate-400">This unit is used by menu recipes.</span>}</label>
                         {!editing && <label className="text-xs font-semibold text-slate-600">Opening stock<input type="number" min="0" step="0.0001" value={form.currentStock} onChange={(e) => setForm({ ...form, currentStock: Number(e.target.value) })} className={`mt-1.5 ${inputClass}`} /></label>}
                         <label className="text-xs font-semibold text-slate-600">Reorder at<input type="number" min="0" step="0.0001" value={form.reorderLevel} onChange={(e) => setForm({ ...form, reorderLevel: Number(e.target.value) })} className={`mt-1.5 ${inputClass}`} /></label>
                         <label className="text-xs font-semibold text-slate-600">Cost per unit (₹)<input type="number" min="0" step="0.01" value={form.costPerUnit} onChange={(e) => setForm({ ...form, costPerUnit: Number(e.target.value) })} className={`mt-1.5 ${inputClass}`} /></label>
@@ -163,12 +183,14 @@ export function InventoryManager({ initialItems, initialMovements }: { initialIt
                         return <article key={item._id} className="space-y-3 p-4">
                             <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="break-words font-semibold text-slate-900">{item.name}</p><p className="break-words text-xs text-slate-500">{item.category}{item.sku ? ` · ${item.sku}` : ''}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${status === 'out' ? 'bg-red-50 text-red-700' : status === 'low' ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'}`}>{item.currentStock} {item.unit}</span></div>
                             <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs"><div><dt className="text-slate-400">Reorder at</dt><dd className="mt-0.5 font-medium text-slate-700">{item.reorderLevel} {item.unit}</dd></div><div><dt className="text-slate-400">Cost / unit</dt><dd className="mt-0.5 font-medium text-slate-700">{formatCurrency(item.costPerUnit)}</dd></div><div><dt className="text-slate-400">Stock value</dt><dd className="mt-0.5 font-semibold text-slate-800">{formatCurrency(item.currentStock * item.costPerUnit)}</dd></div><div className="min-w-0"><dt className="text-slate-400">Supplier</dt><dd className="mt-0.5 break-words font-medium text-slate-700">{item.supplier || '—'}</dd></div></dl>
+                            <p className="break-words text-xs text-slate-500">{usageByInventoryItem[item._id]?.length ? `Used in: ${usageByInventoryItem[item._id].join(', ')}` : 'Not linked to a menu item yet'}</p>
                             <div className="grid grid-cols-[1fr_1fr_auto] gap-2 border-t border-slate-100 pt-3"><button onClick={() => { setAdjusting(item); setAdjustment({ type: 'purchase', quantity: '', note: '', unitCost: String(item.costPerUnit) }); }} className="min-h-10 rounded-lg bg-sky-50 px-2 text-xs font-bold text-sky-700">Adjust stock</button><button onClick={() => openEdit(item)} className="min-h-10 rounded-lg bg-slate-100 px-2 text-xs font-bold text-slate-700">Edit</button><button onClick={() => archive(item)} aria-label={`Archive ${item.name}`} className="flex min-h-10 min-w-10 items-center justify-center rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"><TrashIcon className="h-4 w-4" /></button></div>
                         </article>;
                     })}</div>
-                    <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[850px] text-left text-sm"><thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500"><tr><th className="px-5 py-3">Item</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Reorder level</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Value</th><th className="px-4 py-3">Supplier</th><th className="px-5 py-3 text-right">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{filtered.map((item) => {
+                    <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[1050px] text-left text-sm"><thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500"><tr><th className="px-5 py-3">Item</th><th className="px-4 py-3">Stock</th><th className="px-4 py-3">Reorder level</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Value</th><th className="px-4 py-3">Menu use</th><th className="px-4 py-3">Supplier</th><th className="px-5 py-3 text-right">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{filtered.map((item) => {
                         const status = item.currentStock === 0 ? 'out' : item.currentStock <= item.reorderLevel ? 'low' : 'ok';
-                        return <tr key={item._id} className="hover:bg-slate-50/60"><td className="px-5 py-4"><p className="font-semibold text-slate-900">{item.name}</p><p className="text-[11px] text-slate-400">{item.category}{item.sku ? ` · ${item.sku}` : ''}</p></td><td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${status === 'out' ? 'bg-red-50 text-red-700' : status === 'low' ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'}`}>{item.currentStock} {item.unit}</span></td><td className="px-4 py-4 text-slate-600">{item.reorderLevel} {item.unit}</td><td className="px-4 py-4 text-slate-600">{formatCurrency(item.costPerUnit)}</td><td className="px-4 py-4 font-semibold text-slate-800">{formatCurrency(item.currentStock * item.costPerUnit)}</td><td className="px-4 py-4 text-slate-500">{item.supplier || '—'}</td><td className="px-5 py-4"><div className="flex justify-end gap-2"><button onClick={() => { setAdjusting(item); setAdjustment({ type: 'purchase', quantity: '', note: '', unitCost: String(item.costPerUnit) }); }} className="rounded-lg bg-sky-50 px-3 py-2 text-xs font-bold text-sky-700">Adjust</button><button onClick={() => openEdit(item)} className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700">Edit</button><button onClick={() => archive(item)} aria-label={`Archive ${item.name}`} className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"><TrashIcon className="h-4 w-4" /></button></div></td></tr>;
+                        const menuUse = usageByInventoryItem[item._id] || [];
+                        return <tr key={item._id} className="hover:bg-slate-50/60"><td className="px-5 py-4"><p className="font-semibold text-slate-900">{item.name}</p><p className="text-[11px] text-slate-400">{item.category}{item.sku ? ` · ${item.sku}` : ''}</p></td><td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${status === 'out' ? 'bg-red-50 text-red-700' : status === 'low' ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'}`}>{item.currentStock} {item.unit}</span></td><td className="px-4 py-4 text-slate-600">{item.reorderLevel} {item.unit}</td><td className="px-4 py-4 text-slate-600">{formatCurrency(item.costPerUnit)}</td><td className="px-4 py-4 font-semibold text-slate-800">{formatCurrency(item.currentStock * item.costPerUnit)}</td><td className="max-w-52 px-4 py-4 text-xs text-slate-500">{menuUse.length ? menuUse.join(', ') : 'Not linked'}</td><td className="px-4 py-4 text-slate-500">{item.supplier || '—'}</td><td className="px-5 py-4"><div className="flex justify-end gap-2"><button onClick={() => { setAdjusting(item); setAdjustment({ type: 'purchase', quantity: '', note: '', unitCost: String(item.costPerUnit) }); }} className="rounded-lg bg-sky-50 px-3 py-2 text-xs font-bold text-sky-700">Adjust</button><button onClick={() => openEdit(item)} className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700">Edit</button><button onClick={() => archive(item)} aria-label={`Archive ${item.name}`} className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"><TrashIcon className="h-4 w-4" /></button></div></td></tr>;
                     })}</tbody></table></div>
                     </>
                 )}

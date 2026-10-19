@@ -7,7 +7,7 @@
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:preview": "concurrently \"npm run dev:backend\" \"next dev client -p 5001\"",
     "dev:backend": "API_ONLY=true PORT=3001 tsx server/index.ts",
-    "dev:frontend": "next dev client -p 3000",
+    "dev:frontend": "npm run dev --prefix client -- --webpack",
     "build:client": "npm run build --prefix client",
     "build:server": "tsc -p server/tsconfig.json",
     "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",

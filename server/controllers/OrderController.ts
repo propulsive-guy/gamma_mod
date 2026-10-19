@@ -42,7 +42,7 @@ export class OrderController {
             }
 
             await order.populate('tableId', 'tableNumber');
-            const { inventoryUsage, inventoryRestored, ...updatedOrder } = order.toObject();
+            const { inventoryUsage, inventoryRestored, inventoryDeducted, ...updatedOrder } = order.toObject();
 
             // Emit socket event
             if ((global as any).io) {
@@ -51,7 +51,8 @@ export class OrderController {
 
             res.json(updatedOrder);
         } catch (error: any) {
-            res.status(500).json({ error: error.message });
+            const stockUnavailable = error?.message?.toLowerCase().includes('stock') || error?.message?.includes('ingredient is unavailable');
+            res.status(stockUnavailable ? 409 : 500).json({ error: error.message });
         }
     }
 
@@ -95,7 +96,7 @@ export class OrderController {
         try {
             const orderData = req.body;
             const order = await OrderService.createOrder(orderData);
-            const { inventoryUsage, inventoryRestored, ...createdOrder } = order.toObject();
+            const { inventoryUsage, inventoryRestored, inventoryDeducted, ...createdOrder } = order.toObject();
 
             // Broadcast real-time notification
             if ((global as any).io) {
@@ -110,7 +111,7 @@ export class OrderController {
             res.status(201).json(createdOrder);
         } catch (error: any) {
             console.error('Create order API error:', error);
-            const stockUnavailable = error?.message?.includes('insufficient stock') || error?.message?.includes('ingredient is unavailable');
+            const stockUnavailable = error?.message?.toLowerCase().includes('stock') || error?.message?.includes('ingredient is unavailable');
             res.status(error instanceof OrderInputError ? 400 : stockUnavailable ? 409 : 500)
                 .json({ error: error.message || 'Failed to place order' });
         }
