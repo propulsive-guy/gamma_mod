@@ -364,6 +364,7 @@ export function CustomerMenu({
                         onPlaceOrder={placeOrder}
                         isPlacingOrder={isPlacingOrder}
                         accent={accent} // Pass accent color to Cart
+                        captainMode={captainMode}
                         theme={t} // Pass theme object to Cart
                     />
                 )}

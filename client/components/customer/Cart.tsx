@@ -19,10 +19,11 @@ interface CartProps {
     onPlaceOrder: (details: { name: string; phone: string; instructions: string }) => void;
     isPlacingOrder: boolean;
     accent: string;
+    captainMode?: boolean;
     theme: { bg: string; text: string; subtext: string; border: string; cardBg: string };
 }
 
-export function Cart({ cart, onClose, onUpdateQuantity, onPlaceOrder, isPlacingOrder, accent, theme }: CartProps) {
+export function Cart({ cart, onClose, onUpdateQuantity, onPlaceOrder, isPlacingOrder, accent, captainMode = false, theme }: CartProps) {
     const [name, setName] = useState('');
     const [phone, setPhone] = useState('');
     const [instructions, setInstructions] = useState('');
@@ -161,7 +162,7 @@ export function Cart({ cart, onClose, onUpdateQuantity, onPlaceOrder, isPlacingO
                 {cart.length > 0 && (
                     <div className="max-h-[min(64dvh,520px)] shrink-0 space-y-5 overflow-y-auto border-t p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] backdrop-blur-sm sm:max-h-[65dvh] sm:p-5" style={{ borderColor: theme.border, backgroundColor: theme.bg }}>
                         <div className="space-y-4">
-                            <div className="grid grid-cols-1 gap-3 min-[440px]:grid-cols-2">
+                            {!captainMode && <div className="grid grid-cols-1 gap-3 min-[440px]:grid-cols-2">
                                 <div className="space-y-1">
                                     <label htmlFor="cart-customer-name" className="ml-1 text-xs font-semibold uppercase tracking-wider" style={{ color: theme.subtext }}>Name <span className="font-normal normal-case">(optional)</span></label>
                                     <Input
@@ -197,7 +198,7 @@ export function Cart({ cart, onClose, onUpdateQuantity, onPlaceOrder, isPlacingO
                                     />
                                     {errors.phone && <p className="text-red-500 text-[10px] ml-1">{errors.phone}</p>}
                                 </div>
-                            </div>
+                            </div>}
 
                             <textarea
                                 className="w-full resize-none rounded-xl border px-4 py-3 text-base focus:ring-2 focus:ring-offset-0 transition-all"

@@ -9,15 +9,22 @@ import Table from '@/models/Table';
 
 export const dynamic = 'force-dynamic';
 
-/** One private waiter link for the restaurant; legacy table links still resolve. */
+/** Restaurant-ID Captain URLs are permanent; token-based links remain compatible. */
 export default async function CaptainTablePage(props: { params: Promise<{ token: string }> }) {
     const { token } = await props.params;
-    if (!/^[a-f0-9]{64}$/.test(token)) notFound();
+    const isRestaurantId = mongoose.Types.ObjectId.isValid(token);
+    const isLegacyToken = /^[a-f0-9]{64}$/.test(token);
+    if (!isRestaurantId && !isLegacyToken) notFound();
 
     await dbConnect();
-    const captainRestaurant = await Restaurant.findOne({ captainToken: token })
-        .select('_id name description logoUrl coverImageUrl themeColor logoAccentColor accentSource fontFamily colorScheme +captainToken')
-        .lean();
+    const restaurantFields = '_id name description logoUrl coverImageUrl themeColor logoAccentColor accentSource fontFamily colorScheme';
+    let captainRestaurant = isRestaurantId
+        ? await Restaurant.findById(token).select(restaurantFields).lean()
+        : null;
+
+    if (!captainRestaurant && isLegacyToken) {
+        captainRestaurant = await Restaurant.findOne({ captainToken: token }).select(restaurantFields).lean();
+    }
 
     if (captainRestaurant) {
         const [tables, menuItems] = await Promise.all([

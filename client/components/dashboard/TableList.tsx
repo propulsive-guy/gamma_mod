@@ -27,7 +27,7 @@ function tableColors(index: number) {
     };
 }
 
-export function TableList({ initialTables, restaurantId, captainToken }: { initialTables: Table[]; restaurantId: string; captainToken: string }) {
+export function TableList({ initialTables, restaurantId }: { initialTables: Table[]; restaurantId: string }) {
     const router = useRouter();
     const [showAddForm, setShowAddForm] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -54,6 +54,7 @@ export function TableList({ initialTables, restaurantId, captainToken }: { initi
         } catch { return ''; }
     })();
     const takeawayUrl = qrOrigin + takeawayPath;
+    const captainPath = `/captain/${restaurantId}`;
     const isLoopbackQr = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::|$)/.test(qrOrigin);
 
     useEffect(() => { setQrBaseUrl(window.location.origin); }, []);
@@ -126,9 +127,9 @@ export function TableList({ initialTables, restaurantId, captainToken }: { initi
     };
 
     const copyCaptainLink = async () => {
-        if (!captainToken || !qrOrigin) return;
+        if (!qrOrigin) return;
         try {
-            await navigator.clipboard.writeText(`${qrOrigin}/captain/${captainToken}`);
+            await navigator.clipboard.writeText(`${qrOrigin}${captainPath}`);
             toast.success('Captain link copied');
         } catch {
             toast.error('Could not copy the link. Select and copy it manually.');
@@ -176,18 +177,18 @@ export function TableList({ initialTables, restaurantId, captainToken }: { initi
                             <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-emerald-50 text-emerald-700"><UserGroupIcon className="h-6 w-6" /></div>
                         </div>
                         <p className="mb-5 text-sm leading-relaxed text-gray-600">One link for waiters. Choose a table, add menu items and send its order to the kitchen.</p>
-                        {captainToken && qrOrigin ? (
+                        {qrOrigin ? (
                             <div className="space-y-3 rounded-xl border border-emerald-100 bg-emerald-50 p-3">
-                                <p className="text-xs font-bold text-emerald-900">Captain page URL</p>
-                                <a href={`/captain/${captainToken}`} target="_blank" rel="noopener noreferrer" className="block break-all text-xs font-medium text-emerald-800 underline underline-offset-2">{qrOrigin}/captain/{captainToken}</a>
+                                <p className="text-xs font-bold text-emerald-900">Permanent Captain page URL</p>
+                                <a href={captainPath} target="_blank" rel="noopener noreferrer" className="block break-all text-xs font-medium text-emerald-800 underline underline-offset-2">{qrOrigin}{captainPath}</a>
                                 <div className="grid grid-cols-2 gap-2">
-                                    <a href={`/captain/${captainToken}`} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-emerald-700 px-3 text-xs font-bold text-white"><ArrowTopRightOnSquareIcon className="h-4 w-4" /> Open page</a>
+                                    <a href={captainPath} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-emerald-700 px-3 text-xs font-bold text-white"><ArrowTopRightOnSquareIcon className="h-4 w-4" /> Open page</a>
                                     <button type="button" onClick={() => void copyCaptainLink()} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-white px-3 text-xs font-bold text-emerald-800"><ClipboardDocumentIcon className="h-4 w-4" /> Copy link</button>
                                 </div>
                             </div>
                         ) : (
                             <div className="flex min-h-12 items-center justify-center rounded-xl border border-dashed border-emerald-200 bg-emerald-50 px-4 text-center text-sm font-medium text-emerald-800">
-                                {captainToken ? 'Preparing the permanent waiter URL…' : 'Could not prepare the waiter URL. Refresh this page to retry.'}
+                                Preparing the permanent waiter URL…
                             </div>
                         )}
                     </section>

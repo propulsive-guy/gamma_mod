@@ -1,7 +1,6 @@
 import { auth } from '@/lib/auth';
 import { redirect } from 'next/navigation';
 import dbConnect from '@/lib/db';
-import { getOrCreateCaptainToken } from '@/lib/captain';
 import Table from '@/models/Table';
 import { TableList } from '@/components/dashboard/TableList';
 
@@ -13,13 +12,6 @@ export default async function TablesPage() {
     }
 
     await dbConnect();
-
-    let captainToken = '';
-    try {
-        captainToken = await getOrCreateCaptainToken(session.user.restaurantId);
-    } catch (error) {
-        console.error('Prepare permanent captain URL error:', error);
-    }
 
     await Table.findOneAndUpdate(
         { restaurantId: session.user.restaurantId, tableNumber: '__takeaway__' },
@@ -48,7 +40,6 @@ export default async function TablesPage() {
             <TableList
                 initialTables={JSON.parse(JSON.stringify(tables))}
                 restaurantId={session.user.restaurantId}
-                captainToken={captainToken}
             />
         </div>
     );
