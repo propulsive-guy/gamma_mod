@@ -1,11 +1,9 @@
 'use server';
 
 import mongoose from 'mongoose';
-import { randomBytes } from 'crypto';
 import { revalidatePath, updateTag } from 'next/cache';
 import { auth } from '@/lib/auth';
 import dbConnect from '@/lib/db';
-import Restaurant from '@/models/Restaurant';
 import Table from '@/models/Table';
 
 async function getRestaurantId() {
@@ -166,27 +164,5 @@ export async function toggleTableStatus(id: string) {
     } catch (error) {
         console.error('Toggle table status error:', error);
         return { success: false, error: 'Could not update the table. Try again.' };
-    }
-}
-
-/** Return the signed-in owner's private waiter URL token for the whole restaurant. */
-export async function getCaptainLinkToken() {
-    try {
-        const restaurantId = await getRestaurantId();
-        if (!restaurantId) return { success: false, error: 'Your session has expired. Sign in again.' };
-        await dbConnect();
-
-        const restaurant = await Restaurant.findById(restaurantId).select('+captainToken');
-        if (!restaurant) return { success: false, error: 'Restaurant not found.' };
-
-        if (!restaurant.captainToken) {
-            restaurant.captainToken = randomBytes(32).toString('hex');
-            await restaurant.save();
-        }
-        revalidatePath('/dashboard/tables');
-        return { success: true, token: restaurant.captainToken };
-    } catch (error) {
-        console.error('Get restaurant captain link error:', error);
-        return { success: false, error: 'Could not create the captain link. Try again.' };
     }
 }

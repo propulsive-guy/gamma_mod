@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import QRCode from 'qrcode';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
-import { createTable, createTables, deleteTable, getCaptainLinkToken } from '@/app/actions/table';
+import { createTable, createTables, deleteTable } from '@/app/actions/table';
 import { toast } from 'react-hot-toast';
 import { PlusIcon, TrashIcon, QrCodeIcon, ArrowTopRightOnSquareIcon, UserGroupIcon, ClipboardDocumentIcon } from '@heroicons/react/24/outline';
 import Image from 'next/image';
@@ -27,7 +27,7 @@ function tableColors(index: number) {
     };
 }
 
-export function TableList({ initialTables, restaurantId }: { initialTables: Table[]; restaurantId: string }) {
+export function TableList({ initialTables, restaurantId, captainToken }: { initialTables: Table[]; restaurantId: string; captainToken: string }) {
     const router = useRouter();
     const [showAddForm, setShowAddForm] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -38,8 +38,6 @@ export function TableList({ initialTables, restaurantId }: { initialTables: Tabl
     const [qrBaseUrl, setQrBaseUrl] = useState('');
     const [takeawayQR, setTakeawayQR] = useState('');
     const [tableQRCodes, setTableQRCodes] = useState<Record<string, string>>({});
-    const [captainToken, setCaptainToken] = useState('');
-    const [loadingCaptainLink, setLoadingCaptainLink] = useState(false);
     const takeawayTable = initialTables.find((table) => table.isTakeaway);
     const dineInTables = initialTables.filter((table) => !table.isTakeaway)
         .sort((a, b) => a.tableNumber.localeCompare(b.tableNumber, undefined, { numeric: true }));
@@ -127,22 +125,6 @@ export function TableList({ initialTables, restaurantId }: { initialTables: Tabl
         }
     };
 
-    const handleCreateCaptainLink = async () => {
-        setLoadingCaptainLink(true);
-        try {
-            const result = await getCaptainLinkToken();
-            if (!result.success || !result.token) {
-                toast.error(result.error || 'Could not create captain link');
-                return;
-            }
-            setCaptainToken(result.token);
-        } catch {
-            toast.error('Could not create captain link');
-        } finally {
-            setLoadingCaptainLink(false);
-        }
-    };
-
     const copyCaptainLink = async () => {
         if (!captainToken || !qrOrigin) return;
         try {
@@ -204,9 +186,9 @@ export function TableList({ initialTables, restaurantId }: { initialTables: Tabl
                                 </div>
                             </div>
                         ) : (
-                            <Button disabled={loadingCaptainLink || !qrOrigin} onClick={() => void handleCreateCaptainLink()} className="flex min-h-12 w-full items-center justify-center gap-2 bg-emerald-700 text-white hover:bg-emerald-800 disabled:opacity-50">
-                                <UserGroupIcon className="h-5 w-5" /> {loadingCaptainLink ? 'Creating captain page…' : 'Create captain page URL'}
-                            </Button>
+                            <div className="flex min-h-12 items-center justify-center rounded-xl border border-dashed border-emerald-200 bg-emerald-50 px-4 text-center text-sm font-medium text-emerald-800">
+                                {captainToken ? 'Preparing the permanent waiter URL…' : 'Could not prepare the waiter URL. Refresh this page to retry.'}
+                            </div>
                         )}
                     </section>
             </div>
