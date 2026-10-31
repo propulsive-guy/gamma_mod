@@ -116,6 +116,7 @@ export default function OrderStatusPage() {
     const [tipChoice, setTipChoice] = useState('0');
     const [customTip, setCustomTip] = useState('');
     const [submitting, setSubmitting] = useState(false);
+    const [preparingPaymentOrderId, setPreparingPaymentOrderId] = useState<string | null>(null);
     const [checkoutError, setCheckoutError] = useState('');
     const [sessionId, setSessionId] = useState<string | null>(null);
     const [visitId, setVisitId] = useState<string | null>(null);
@@ -222,19 +223,15 @@ export default function OrderStatusPage() {
         }
     })();
 
-    const openCheckout = (order: Order) => {
-        if (order.checkout && typeof order.checkout.payableAmount === 'number') {
-            setPaymentOrderId(order._id);
-            return;
-        }
-        setFoodRating(0);
-        setExperienceRating(0);
-        setPreparationRating(0);
-        setPackagingRating(0);
-        setReviewText('');
-        setCouponCode('');
-        setTipChoice('0');
-        setCustomTip('');
+    const openBillOptions = (order: Order) => {
+        setFoodRating(order.review?.foodRating || 0);
+        setExperienceRating(order.review?.experienceRating || 0);
+        setPreparationRating(order.review?.preparationRating || 0);
+        setPackagingRating(order.review?.packagingRating || 0);
+        setReviewText(order.review?.comment || '');
+        setCouponCode(order.checkout?.couponCode || '');
+        setTipChoice(order.checkout?.tipAmount ? 'custom' : '0');
+        setCustomTip(order.checkout?.tipAmount?.toString() || '');
         setCheckoutError('');
         setReviewOrder(order);
     };
@@ -305,6 +302,50 @@ export default function OrderStatusPage() {
         setReviewOrder(null);
     };
 
+    const startPayment = (order: Order) => {
+        setCheckoutError('');
+        setPaymentOrderId(order._id);
+        if (order.checkout && typeof order.checkout.payableAmount === 'number') return;
+
+        // Display the amount and its QR immediately, then persist the bill in the
+        // background. This keeps the payment action responsive even on slow APIs.
+        const takeaway = order.orderType === 'takeaway' || isTakeaway;
+        const gstRate = Math.max(0, Number(restaurant?.gstPercentage) || 0);
+        const sgstRate = Math.max(0, Number(restaurant?.sgstPercentage) || 0);
+        const packagingCharge = takeaway ? Math.max(0, Number(restaurant?.packagingCharge) || 0) : 0;
+        const taxableSubtotal = roundMoney(order.total);
+        const fallbackCheckout: NonNullable<Order['checkout']> = {
+            couponCode: '',
+            discountAmount: 0,
+            tipAmount: 0,
+            packagingCharge: roundMoney(packagingCharge),
+            gstRate,
+            sgstRate,
+            gstAmount: roundMoney(taxableSubtotal * gstRate / 100),
+            sgstAmount: roundMoney(taxableSubtotal * sgstRate / 100),
+            payableAmount: roundMoney(taxableSubtotal + taxableSubtotal * gstRate / 100 + taxableSubtotal * sgstRate / 100 + packagingCharge),
+        };
+        setLocalCheckouts((current) => ({ ...current, [order._id]: fallbackCheckout }));
+
+        if (!sessionId) return;
+        setPreparingPaymentOrderId(order._id);
+        void prepareCustomerCheckout({
+            orderId: order._id,
+            sessionId,
+            tableId,
+            couponCode: '',
+            tipAmount: 0,
+        }).then((result) => {
+            if (result.success && result.order) {
+                setOrders((current) => current.map((currentOrder) => currentOrder._id === result.order!._id ? result.order! : currentOrder));
+            } else {
+                console.error('Could not persist checkout before UPI payment; keeping the locally calculated bill visible.', result.error);
+            }
+        }).catch((error) => {
+            console.error('Could not persist checkout before UPI payment; keeping the locally calculated bill visible.', error);
+        }).finally(() => setPreparingPaymentOrderId(null));
+    };
+
     const orderedNames = new Set(orders.filter((order) => order.status !== 'cancelled')
         .flatMap((order) => order.items.map((item) => item.name.toLowerCase().trim())));
     const memoryImages = menuItems.filter((item) => item.aestheticImageUrl && orderedNames.has(item.name.toLowerCase().trim()));
@@ -361,6 +402,8 @@ export default function OrderStatusPage() {
                                 {!isTakeaway && !!paymentOrder.checkout.tipAmount && <div className="flex justify-between"><span>Tip</span><span>{formatCurrency(paymentOrder.checkout.tipAmount)}</span></div>}
                                 <div className="flex justify-between border-t border-zinc-100 pt-3 text-base font-bold text-zinc-900"><span>To pay</span><span>{formatCurrency(paymentOrder.checkout.payableAmount)}</span></div>
                             </div>
+                            {preparingPaymentOrderId === paymentOrder._id && <p role="status" className="mt-4 text-xs text-zinc-500">Saving your final bill. You can scan the QR or open your UPI app now.</p>}
+                            <button type="button" onClick={() => openBillOptions(paymentOrder)} className="mt-5 rounded-xl border border-zinc-200 px-4 py-2.5 text-xs font-semibold text-zinc-600 hover:bg-zinc-50">Add a tip, discount or review</button>
                         </div>
                     </section>
                 ) : <>
@@ -486,10 +529,10 @@ export default function OrderStatusPage() {
                                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                             <div>
                                                 <p className="text-sm font-bold">Ready when you are</p>
-                                                <p className="mt-1 text-xs text-zinc-500">A quick review, then scan or open your UPI app.</p>
+                                                <p className="mt-1 text-xs text-zinc-500">Open your UPI app or scan a QR with this bill amount.</p>
                                             </div>
-                                            <button type="button" onClick={() => openCheckout(order)} className="inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-sm font-bold transition hover:opacity-90" style={{ backgroundColor: accent, color: accentText }}>
-                                                <CreditCardIcon className="h-5 w-5" /> {hasCheckout ? 'View payment' : restaurant?.upiId ? 'Pay via UPI' : 'Continue to checkout'}
+                                            <button type="button" onClick={() => startPayment(order)} className="inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-sm font-bold transition hover:opacity-90" style={{ backgroundColor: accent, color: accentText }}>
+                                                <CreditCardIcon className="h-5 w-5" /> {preparingPaymentOrderId === order._id ? 'Preparing bill…' : hasCheckout ? 'View payment' : restaurant?.upiId ? 'Pay via UPI' : 'View final bill'}
                                                 <ArrowRightIcon className="h-4 w-4" />
                                             </button>
                                     </div>
@@ -648,48 +691,54 @@ function RatingInput({ label, value, onChange, accent }: { label: string; value:
 
 function UPIPaymentSection({ restaurant, amount, orderId, accent }: { restaurant: RestaurantInfo | null; amount: number; orderId: string; accent: string }) {
     const [qrCodeData, setQrCodeData] = useState('');
+    const [qrError, setQrError] = useState(false);
     const [launchHint, setLaunchHint] = useState('');
+    const [isIOS, setIsIOS] = useState(false);
+    const [returnUrl, setReturnUrl] = useState('');
     const payee = restaurant?.upiId?.trim();
     const payeeName = restaurant?.upiPayeeName?.trim() || restaurant?.name?.trim() || '';
     const merchantCode = restaurant?.merchantCode?.trim();
     const transactionNote = `Order ${orderId.slice(-6).toUpperCase()} ${restaurant?.name?.trim() || ''}`.slice(0, 80).trim();
-    const upiParams = new URLSearchParams({
-        pa: payee || '',
-        pn: payeeName,
-        tr: orderId,
-        tn: transactionNote,
-        am: amount.toFixed(2),
-        cu: 'INR',
-    });
+    const upiParams = new URLSearchParams();
+    if (payee) upiParams.set('pa', payee);
+    upiParams.set('pn', payeeName);
+    upiParams.set('tr', orderId);
+    upiParams.set('tn', transactionNote);
+    upiParams.set('am', Number.isFinite(amount) ? amount.toFixed(2) : '0.00');
+    upiParams.set('cu', 'INR');
     if (merchantCode && /^\d{4}$/.test(merchantCode) && merchantCode !== '0000') {
         upiParams.set('mc', merchantCode);
     }
+    if (returnUrl) upiParams.set('url', returnUrl);
     const upiUrl = payee ? `upi://pay?${upiParams.toString()}` : '';
-    const upiQuery = upiUrl.split('?')[1] || '';
-    const androidIntentUrl = upiQuery ? `intent://pay?${upiQuery}#Intent;scheme=upi;end` : '';
-    const googlePayUrl = upiQuery ? `gpay://upi/pay?${upiQuery}` : '';
+    const googlePayUrl = payee ? `gpay://upi/pay?${upiParams.toString()}` : '';
+    const appLaunchUrl = isIOS ? googlePayUrl : upiUrl;
 
-    const openUPIApp = () => {
-        if (!upiUrl) return;
+    useEffect(() => {
         const userAgent = navigator.userAgent;
-        const isIOS = /iPhone|iPad|iPod/i.test(userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-        const isAndroid = /Android/i.test(userAgent);
-        const targetUrl = isIOS ? googlePayUrl : isAndroid ? androidIntentUrl : upiUrl;
-        setLaunchHint('If your payment app does not open, use the standard UPI link below or scan the QR code.');
-        window.location.assign(targetUrl);
-    };
+        setIsIOS(/iPhone|iPad|iPod/i.test(userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+        const currentPage = new URL(window.location.href);
+        currentPage.searchParams.delete('visit');
+        currentPage.hash = '';
+        setReturnUrl(currentPage.toString());
+    }, []);
 
     useEffect(() => {
         if (!upiUrl) return;
-        let mounted = true;
+        let cancelled = false;
+        setQrCodeData('');
+        setQrError(false);
         void QRCode.toDataURL(upiUrl, { errorCorrectionLevel: 'M', margin: 2, width: 280 })
-            .then((url) => { if (mounted) setQrCodeData(url); })
-            .catch(() => { if (mounted) setQrCodeData(''); });
-        return () => { mounted = false; };
+            .then((url) => { if (!cancelled) setQrCodeData(url); })
+            .catch((error) => {
+                console.error('Could not generate bill UPI QR:', error);
+                if (!cancelled) setQrError(true);
+            });
+        return () => { cancelled = true; };
     }, [upiUrl]);
 
-    if (!payee) {
-        return <div className="rounded-2xl bg-white p-5 text-center"><p className="font-bold">Please pay at the counter</p><p className="mt-1 text-sm text-zinc-500">This restaurant has not set up UPI yet. Your amount is {formatCurrency(amount)}.</p></div>;
+    if (!payee || !Number.isFinite(amount) || amount <= 0) {
+        return <div className="rounded-2xl bg-white p-5 text-center"><p className="font-bold">{payee ? 'No payment is due' : 'Please pay at the counter'}</p><p className="mt-1 text-sm text-zinc-500">{payee ? 'The final bill amount must be greater than ₹0.' : `This restaurant has not set up UPI yet. Your amount is ${formatCurrency(amount)}.`}</p></div>;
     }
 
     return (
@@ -699,12 +748,13 @@ function UPIPaymentSection({ restaurant, amount, orderId, accent }: { restaurant
             <p className="mt-1 text-sm text-zinc-500">Scan with any UPI app, or tap below on your phone.</p>
             <div className="mx-auto mt-5 grid h-60 w-60 place-items-center rounded-[24px] border border-zinc-100 bg-white p-3 shadow-sm">
                 {qrCodeData ? <img src={qrCodeData} alt={'UPI QR code to pay ' + formatCurrency(amount) + ' to ' + payeeName} className="h-full w-full object-contain" /> :
-                    <span className="text-xs text-zinc-400">Preparing QR code…</span>}
+                    <span role={qrError ? 'alert' : 'status'} className="px-3 text-xs text-zinc-400">{qrError ? 'QR could not be generated. Use the UPI app button below.' : 'Preparing bill QR…'}</span>}
             </div>
             <p className="mt-4 text-2xl font-bold">{formatCurrency(amount)}</p>
             <p className="mt-1 text-xs text-zinc-500">Paying {payeeName} · {payee}</p>
-            <button type="button" onClick={openUPIApp} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl px-5 py-3.5 text-sm font-bold" style={{ backgroundColor: accent, color: contrastTextColor(accent) }}>Open UPI app <ArrowRightIcon className="h-4 w-4" /></button>
-            <a href={upiUrl} className="mt-3 inline-flex min-h-11 items-center justify-center rounded-xl px-4 text-xs font-semibold text-zinc-600 underline underline-offset-4">Try the standard UPI link</a>
+            <p className="mt-2 text-xs font-semibold text-emerald-700">The QR includes this exact bill amount.</p>
+            <a href={appLaunchUrl} onClick={() => setLaunchHint(isIOS ? 'Opening Google Pay. If it is not installed, scan the QR code with another UPI app.' : 'Opening your available UPI apps. If no app opens, scan this QR code.')} className="mt-5 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl px-5 py-3.5 text-sm font-bold" style={{ backgroundColor: accent, color: contrastTextColor(accent) }}>{isIOS ? 'Open Google Pay' : 'Pay with any UPI app'} <ArrowRightIcon className="h-4 w-4" /></a>
+            {isIOS && <a href={upiUrl} onClick={() => setLaunchHint('Trying the standard UPI link. If no app opens, scan this QR code.')} className="mt-2 inline-flex min-h-11 items-center justify-center rounded-xl px-4 text-xs font-semibold text-zinc-600 underline underline-offset-4">Try another UPI app</a>}
             {launchHint && <p role="status" className="mt-1 text-xs text-zinc-500">{launchHint}</p>}
             <p className="mt-3 text-xs text-zinc-400">Your restaurant will confirm the payment after you complete it in your UPI app.</p>
         </div>
