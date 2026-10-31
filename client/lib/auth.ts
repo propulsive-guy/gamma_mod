@@ -12,7 +12,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
                 password: { label: 'Password', type: 'password' },
             },
             async authorize(credentials) {
-                if (!credentials?.email || !credentials?.password) {
+                const email = typeof credentials?.email === 'string' ? credentials.email.trim().toLowerCase() : '';
+                const password = typeof credentials?.password === 'string' ? credentials.password : '';
+                if (!email || !password) {
                     return null;
                 }
 
@@ -24,20 +26,27 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify({
-                            email: credentials.email,
-                            password: credentials.password,
+                            email,
+                            password,
                         }),
+                        signal: AbortSignal.timeout(12000),
                     });
 
-                    if (!res.ok) {
+                    if (res.status === 401) {
                         return null;
+                    }
+                    if (!res.ok) {
+                        throw new Error(`Login verification service returned HTTP ${res.status}`);
                     }
 
                     const user = await res.json();
+                    if (!user || typeof user.id !== 'string' || typeof user.email !== 'string') {
+                        throw new Error('Login verification service returned an invalid user record');
+                    }
                     return user; // Returns { id, email, name, role, restaurantId }
                 } catch (error) {
                     console.error('NextAuth authorize fetch error:', error);
-                    return null;
+                    throw error;
                 }
             },
         }),

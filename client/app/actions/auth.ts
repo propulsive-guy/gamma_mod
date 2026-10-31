@@ -5,18 +5,42 @@ import { AuthError } from 'next-auth';
 import { getBackendUrl } from '@/lib/backendUrl';
 
 export async function signInAction(email: string, password: string) {
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    if (!normalizedEmail || typeof password !== 'string' || !password) {
+        return { success: false, error: 'Enter your email and password.' };
+    }
+
     try {
-        await signIn('credentials', {
-            email,
+        const responseUrl = await signIn('credentials', {
+            email: normalizedEmail,
             password,
             redirect: false,
+            redirectTo: '/dashboard',
         });
+
+        if (typeof responseUrl === 'string') {
+            const authUrl = new URL(responseUrl, 'http://auth.local');
+            const authError = authUrl.searchParams.get('error');
+            if (authError === 'CredentialsSignin') {
+                return { success: false, error: 'Email or password is incorrect.' };
+            }
+            if (authError) {
+                console.error('Auth.js sign-in returned an error:', authError);
+                return { success: false, error: 'Login service is temporarily unavailable. Please try again.' };
+            }
+        }
+
         return { success: true };
     } catch (error) {
         if (error instanceof AuthError) {
-            return { success: false, error: 'Invalid credentials' };
+            if (error.type === 'CredentialsSignin') {
+                return { success: false, error: 'Email or password is incorrect.' };
+            }
+            console.error('Auth.js sign-in failed:', error.type);
+            return { success: false, error: 'Login service is temporarily unavailable. Please try again.' };
         }
-        return { success: false, error: 'An error occurred' };
+        console.error('Sign-in action failed:', error);
+        return { success: false, error: 'Login service is temporarily unavailable. Please try again.' };
     }
 }
 

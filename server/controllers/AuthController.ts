@@ -10,6 +10,7 @@ export class AuthController {
     static async signup(req: Request, res: Response) {
         try {
             const { name, email, password, restaurantName, fssaiNumber, phone, address, secretKey } = req.body;
+            const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
 
             const validKey = process.env.SIGNUP_SECRET_KEY;
             if (!validKey || secretKey !== validKey) {
@@ -20,7 +21,7 @@ export class AuthController {
             }
 
             // Check if user already exists
-            const existingUser = await User.findOne({ email });
+            const existingUser = await User.findOne({ email: AuthController.emailLookup(normalizedEmail) });
             if (existingUser) {
                 return res.status(400).json({ error: 'Email already registered' });
             }
@@ -31,7 +32,7 @@ export class AuthController {
             // Create user
             const user = await User.create({
                 name,
-                email,
+                email: normalizedEmail,
                 password: hashedPassword,
                 role: 'restaurant_owner',
             });
@@ -80,12 +81,13 @@ export class AuthController {
     static async verify(req: Request, res: Response) {
         try {
             const { email, password } = req.body;
+            const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
 
-            if (!email || !password) {
+            if (!normalizedEmail || typeof password !== 'string' || !password) {
                 return res.status(400).json({ error: 'Email and password are required' });
             }
 
-            const user = await User.findOne({ email });
+            const user = await User.findOne({ email: AuthController.emailLookup(normalizedEmail) });
             if (!user) {
                 return res.status(401).json({ error: 'Invalid credentials' });
             }
@@ -106,5 +108,11 @@ export class AuthController {
             console.error('Verify API error:', error);
             res.status(500).json({ error: 'Authentication failed' });
         }
+    }
+
+    /** Match normalized emails and legacy records that may contain mixed case. */
+    private static emailLookup(email: string) {
+        const escapedEmail = email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`^${escapedEmail}$`, 'i');
     }
 }
