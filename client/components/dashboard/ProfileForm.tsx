@@ -269,6 +269,8 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
             submitData.append('sgstPercentage', sgstPercentage);
             submitData.append('packagingCharge', packagingCharge);
             submitData.append('enableAestheticDownloads', enableAestheticDownloads ? 'true' : 'false');
+            submitData.append('instagramUrl', instagramUrl);
+            submitData.append('googleReviewUrl', googleReviewUrl);
             if (logoFile) submitData.append('logo', logoFile);
             if (coverFile) submitData.append('cover', coverFile);
 
@@ -280,14 +282,7 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
 
             setLogoFile(null);
             setCoverFile(null);
-            // Social links use their dedicated direct-to-MongoDB save action.
-            const socialResult = await saveRestaurantSocialLinks(instagramUrl, googleReviewUrl);
-            if (!socialResult.success) {
-                toast.error(`Profile saved, but social links were not: ${socialResult.error || 'please save them separately.'}`, { id: toastId, duration: 6000 });
-                return;
-            }
-
-            toast.success('Profile and social links saved successfully!', { id: toastId });
+            toast.success('All profile details saved successfully!', { id: toastId });
         } catch (error) {
             console.error('Error saving settings:', error);
             toast.error('An unexpected error occurred', { id: toastId });

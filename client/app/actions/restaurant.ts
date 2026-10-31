@@ -91,6 +91,11 @@ export async function updateRestaurant(formData: FormData) {
         }
         if (!name) return { success: false, error: 'Restaurant name is required.' };
         if (name.length > 120) return { success: false, error: 'Restaurant name must be 120 characters or fewer.' };
+        const instagramUrl = readText('instagramUrl');
+        const googleReviewUrl = readText('googleReviewUrl');
+        if (instagramUrl.length > 2048 || googleReviewUrl.length > 2048) {
+            return { success: false, error: 'Social links must be 2,048 characters or fewer.' };
+        }
 
         const parsePercentage = (key: string) => {
             const raw = readText(key);
@@ -146,6 +151,9 @@ export async function updateRestaurant(formData: FormData) {
             sgstPercentage,
             packagingCharge,
             enableAestheticDownloads: readText('enableAestheticDownloads') === 'true',
+            instagramHandle: '',
+            instagramUrl,
+            googleReviewUrl,
         };
         if (logoUrl !== undefined) update.logoUrl = logoUrl;
         if (coverImageUrl !== undefined) update.coverImageUrl = coverImageUrl;
@@ -163,6 +171,8 @@ export async function updateRestaurant(formData: FormData) {
             restaurant.merchantCode !== update.merchantCode ? 'merchant code' : '',
             restaurant.appId !== update.appId ? 'app ID' : '',
             restaurant.name !== update.name ? 'restaurant name' : '',
+            restaurant.instagramUrl !== update.instagramUrl ? 'Instagram URL' : '',
+            restaurant.googleReviewUrl !== update.googleReviewUrl ? 'Google review URL' : '',
         ].filter(Boolean);
         if (fieldsNotSaved.length) {
             console.error('Profile MongoDB verification mismatch', { restaurantId, fieldsNotSaved });
