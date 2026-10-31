@@ -1,7 +1,7 @@
 import NextAuth from 'next-auth';
 import { authConfig } from '@/lib/auth.config';
 import Credentials from 'next-auth/providers/credentials';
-import { getBackendUrl } from '@/lib/backendUrl';
+import { getBackendUrl, PRODUCTION_BACKEND_FALLBACK } from '@/lib/backendUrl';
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
     ...authConfig,
@@ -18,36 +18,44 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
                     return null;
                 }
 
-                const backendUrl = getBackendUrl();
-                try {
-                    const res = await fetch(`${backendUrl}/api/v1/auth/verify`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            email,
-                            password,
-                        }),
-                        signal: AbortSignal.timeout(12000),
-                    });
+                const primaryUrl = getBackendUrl();
+                const backendUrls = process.env.NODE_ENV === 'production'
+                    ? [...new Set([primaryUrl, PRODUCTION_BACKEND_FALLBACK])]
+                    : [primaryUrl];
+                let lastError: unknown;
 
-                    if (res.status === 401) {
-                        return null;
-                    }
-                    if (!res.ok) {
-                        throw new Error(`Login verification service returned HTTP ${res.status}`);
-                    }
+                for (const backendUrl of backendUrls) {
+                    try {
+                        const res = await fetch(`${backendUrl}/api/v1/auth/verify`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({ email, password }),
+                            signal: AbortSignal.timeout(8000),
+                        });
 
-                    const user = await res.json();
-                    if (!user || typeof user.id !== 'string' || typeof user.email !== 'string') {
-                        throw new Error('Login verification service returned an invalid user record');
+                        if (res.status === 401) {
+                            return null;
+                        }
+                        if (!res.ok) {
+                            lastError = new Error(`Login verification service returned HTTP ${res.status}`);
+                            continue;
+                        }
+
+                        const user = await res.json();
+                        if (!user || typeof user.id !== 'string' || typeof user.email !== 'string') {
+                            lastError = new Error('Login verification service returned an invalid user record');
+                            continue;
+                        }
+                        return user; // Returns { id, email, name, role, restaurantId }
+                    } catch (error) {
+                        lastError = error;
                     }
-                    return user; // Returns { id, email, name, role, restaurantId }
-                } catch (error) {
-                    console.error('NextAuth authorize fetch error:', error);
-                    throw error;
                 }
+
+                console.error('NextAuth could not reach a login verification service:', lastError);
+                throw lastError instanceof Error ? lastError : new Error('Login verification service is unavailable');
             },
         }),
     ],
