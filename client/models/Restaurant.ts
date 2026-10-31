@@ -26,6 +26,7 @@ export interface IRestaurant extends Document {
     status: 'active' | 'suspended' | 'onboarding';
     customDomain?: string;
     enableAestheticDownloads?: boolean;
+    inventoryTrackingEnabled: boolean;
     instagramHandle?: string;
     instagramUrl?: string;
     googleReviewUrl?: string;
@@ -158,6 +159,10 @@ const restaurantSchema = new Schema<IRestaurant>(
         enableAestheticDownloads: {
             type: Boolean,
             default: false,
+        },
+        inventoryTrackingEnabled: {
+            type: Boolean,
+            default: true,
         },
         instagramHandle: {
             type: String,

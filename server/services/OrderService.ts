@@ -5,6 +5,7 @@ import StockMovement from '@/models/StockMovement';
 import KitchenStock from '@/models/KitchenStock';
 import KitchenStockLot from '@/models/KitchenStockLot';
 import Table from '@/models/Table';
+import Restaurant from '@/models/Restaurant';
 import mongoose from 'mongoose';
 import { consumeKitchenLots, createKitchenLot, expireDueKitchenLots, seedLegacyKitchenLots } from '../../shared/kitchenStockLots';
 
@@ -37,8 +38,13 @@ export class OrderService {
         let createdOrder: IOrder | null = null;
         try {
             await session.withTransaction(async () => {
-                await seedLegacyKitchenLots({ Lot: KitchenStockLot, KitchenStock, InventoryItem }, data.restaurantId, session);
-                await expireDueKitchenLots({ Lot: KitchenStockLot, KitchenStock, StockMovement }, data.restaurantId, session);
+                const restaurant = await Restaurant.findById(data.restaurantId)
+                    .select('inventoryTrackingEnabled').session(session);
+                const inventoryTrackingEnabled = restaurant?.inventoryTrackingEnabled !== false;
+                if (inventoryTrackingEnabled) {
+                    await seedLegacyKitchenLots({ Lot: KitchenStockLot, KitchenStock, InventoryItem }, data.restaurantId, session);
+                    await expireDueKitchenLots({ Lot: KitchenStockLot, KitchenStock, StockMovement }, data.restaurantId, session);
+                }
                 const table = await Table.findOne({ _id: data.tableId, restaurantId: data.restaurantId, isActive: true }).session(session);
                 if (!table) throw new Error('This ordering QR is unavailable');
 
@@ -54,7 +60,7 @@ export class OrderService {
                     const dbItem = byId.get(String(item.menuItemId));
                     if (!dbItem) throw new Error('A menu item is unavailable. Please refresh the menu.');
                     calculatedTotal += dbItem.price * item.quantity;
-                    for (const part of dbItem.recipe || []) {
+                    for (const part of inventoryTrackingEnabled ? dbItem.recipe || [] : []) {
                         if (!dbItem.departmentId) throw new OrderInputError(`Set a kitchen department for ${dbItem.name} in Menu before accepting orders.`);
                         const key = `${dbItem.departmentId}:${part.inventoryItemId}`;
                         const existing = required.get(key);
@@ -90,23 +96,27 @@ export class OrderService {
 
                 // Reserve recipe quantities from the assigned kitchen department
                 // when the order is placed. Cancellation restores the same stock.
-                const requiredIds = [...new Set([...required.values()].map((part) => String(part.inventoryItemId)))];
+                const requiredIds = inventoryTrackingEnabled
+                    ? [...new Set([...required.values()].map((part) => String(part.inventoryItemId)))]
+                    : [];
                 const stockItems = requiredIds.length
                     ? await InventoryItem.find({
                         _id: { $in: requiredIds }, restaurantId: data.restaurantId, isActive: true,
                     }).session(session)
                     : [];
                 const stockById = new Map(stockItems.map((item) => [String(item._id), item]));
-                const usage = [...required.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, part]) => {
-                    const inventoryItem = stockById.get(String(part.inventoryItemId));
-                    if (!inventoryItem) throw new OrderInputError('A linked ingredient is unavailable. Please update the menu recipe.');
-                    return {
-                        inventoryItemId: inventoryItem._id,
-                        departmentId: part.departmentId,
-                        quantity: Math.round(part.quantity * 10000) / 10000,
-                        unitCost: inventoryItem.costPerUnit,
-                    };
-                });
+                const usage = inventoryTrackingEnabled
+                    ? [...required.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, part]) => {
+                        const inventoryItem = stockById.get(String(part.inventoryItemId));
+                        if (!inventoryItem) throw new OrderInputError('A linked ingredient is unavailable. Please update the menu recipe.');
+                        return {
+                            inventoryItemId: inventoryItem._id,
+                            departmentId: part.departmentId,
+                            quantity: Math.round(part.quantity * 10000) / 10000,
+                            unitCost: inventoryItem.costPerUnit,
+                        };
+                    })
+                    : [];
                 order.inventoryUsage = usage;
                 for (const part of usage) {
                     const quantity = Math.round(part.quantity * 10000) / 10000;
@@ -127,7 +137,7 @@ export class OrderService {
                         unitCost: part.unitCost, note: `Reserved for order ${order._id}`,
                     }], { session });
                 }
-                order.inventoryDeducted = usage.length > 0;
+                order.inventoryDeducted = !inventoryTrackingEnabled || usage.length > 0;
                 await order.save({ session });
                 createdOrder = order;
             });
