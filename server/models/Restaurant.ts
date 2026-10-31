@@ -30,6 +30,7 @@ export interface IRestaurant extends Document {
     instagramHandle?: string;
     instagramUrl?: string;
     googleReviewUrl?: string;
+    captainToken?: string;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -180,11 +181,17 @@ const restaurantSchema = new Schema<IRestaurant>(
             default: '',
             maxlength: 2048,
         },
+        captainToken: {
+            type: String,
+            select: false,
+        },
     },
     {
         timestamps: true,
     }
 );
+
+restaurantSchema.index({ captainToken: 1 }, { unique: true, sparse: true });
 
 
 const Restaurant: Model<IRestaurant> =

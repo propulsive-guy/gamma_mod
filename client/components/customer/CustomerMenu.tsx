@@ -208,10 +208,14 @@ export function CustomerMenu({
             });
 
             if (result.success) {
-                toast.success('Order placed successfully!');
+                toast.success(captainMode
+                    ? `Order saved for Table ${table.tableNumber}. Its KOT is available in Orders.`
+                    : 'Order placed successfully!');
                 setCart([]);
                 setShowCart(false);
-                router.push(`/table/${restaurant._id}/${table._id}/order-status?visit=${currentVisit.visitId}&pay=${encodeURIComponent(result.data._id)}`);
+                if (!captainMode) {
+                    router.push(`/table/${restaurant._id}/${table._id}/order-status?visit=${currentVisit.visitId}&pay=${encodeURIComponent(result.data._id)}`);
+                }
             } else {
                 toast.error(result.error || 'Failed to place order');
             }
@@ -227,7 +231,7 @@ export function CustomerMenu({
             <link rel="stylesheet" href={fontUrlMap[font] || fontUrlMap.inter} />
 
             <div className="min-h-[100dvh] overflow-x-hidden pb-32 transition-colors duration-300" style={{ backgroundColor: t.bg, fontFamily, color: t.text }}>
-                <header className="sticky top-0 z-40 border-b backdrop-blur-2xl" style={{ backgroundColor: t.headerBg, borderColor: t.border }}>
+                <header className={`sticky ${captainMode ? 'top-[60px]' : 'top-0'} z-40 border-b backdrop-blur-2xl`} style={{ backgroundColor: t.headerBg, borderColor: t.border }}>
                     <div className="mx-auto flex h-[68px] max-w-6xl items-center justify-between gap-3 px-4 sm:px-6">
                         <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
                             {restaurant.logoUrl ? (

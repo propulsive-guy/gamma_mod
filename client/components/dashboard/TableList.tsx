@@ -38,8 +38,8 @@ export function TableList({ initialTables, restaurantId }: { initialTables: Tabl
     const [qrBaseUrl, setQrBaseUrl] = useState('');
     const [takeawayQR, setTakeawayQR] = useState('');
     const [tableQRCodes, setTableQRCodes] = useState<Record<string, string>>({});
-    const [captainTokens, setCaptainTokens] = useState<Record<string, string>>({});
-    const [loadingCaptainTable, setLoadingCaptainTable] = useState<string | null>(null);
+    const [captainToken, setCaptainToken] = useState('');
+    const [loadingCaptainLink, setLoadingCaptainLink] = useState(false);
     const takeawayTable = initialTables.find((table) => table.isTakeaway);
     const dineInTables = initialTables.filter((table) => !table.isTakeaway)
         .sort((a, b) => a.tableNumber.localeCompare(b.tableNumber, undefined, { numeric: true }));
@@ -127,27 +127,26 @@ export function TableList({ initialTables, restaurantId }: { initialTables: Tabl
         }
     };
 
-    const handleCreateCaptainLink = async (tableId: string) => {
-        setLoadingCaptainTable(tableId);
+    const handleCreateCaptainLink = async () => {
+        setLoadingCaptainLink(true);
         try {
-            const result = await getCaptainLinkToken(tableId);
+            const result = await getCaptainLinkToken();
             if (!result.success || !result.token) {
                 toast.error(result.error || 'Could not create captain link');
                 return;
             }
-            setCaptainTokens((current) => ({ ...current, [tableId]: result.token! }));
+            setCaptainToken(result.token);
         } catch {
             toast.error('Could not create captain link');
         } finally {
-            setLoadingCaptainTable(null);
+            setLoadingCaptainLink(false);
         }
     };
 
-    const copyCaptainLink = async (tableId: string) => {
-        const token = captainTokens[tableId];
-        if (!token || !qrOrigin) return;
+    const copyCaptainLink = async () => {
+        if (!captainToken || !qrOrigin) return;
         try {
-            await navigator.clipboard.writeText(`${qrOrigin}/captain/${token}`);
+            await navigator.clipboard.writeText(`${qrOrigin}/captain/${captainToken}`);
             toast.success('Captain link copied');
         } catch {
             toast.error('Could not copy the link. Select and copy it manually.');
@@ -163,9 +162,8 @@ export function TableList({ initialTables, restaurantId }: { initialTables: Tabl
 
     return (
         <div className="space-y-8">
-            {takeawayTable && (
-                <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-                    <section className="group rounded-2xl border border-gray-100 bg-white p-6 shadow-sm transition-all hover:shadow-lg">
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+                    {takeawayTable && <section className="group rounded-2xl border border-gray-100 bg-white p-6 shadow-sm transition-all hover:shadow-lg">
                         <div className="mb-6">
                             <h2 className="text-sm font-medium uppercase tracking-wide text-gray-500">Takeaway</h2>
                             <p className="mt-1 font-display text-3xl font-bold text-gray-900">QR Code</p>
@@ -186,9 +184,32 @@ export function TableList({ initialTables, restaurantId }: { initialTables: Tabl
                             <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" />
                             Open Takeaway Menu
                         </a>
+                    </section>}
+                    <section className="group rounded-2xl border border-emerald-100 bg-white p-6 shadow-sm transition-all hover:shadow-lg">
+                        <div className="mb-5 flex items-start justify-between gap-3">
+                            <div>
+                                <h2 className="text-sm font-medium uppercase tracking-wide text-gray-500">Captain</h2>
+                                <p className="mt-1 font-display text-3xl font-bold text-gray-900">Waiter page</p>
+                            </div>
+                            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-emerald-50 text-emerald-700"><UserGroupIcon className="h-6 w-6" /></div>
+                        </div>
+                        <p className="mb-5 text-sm leading-relaxed text-gray-600">One link for waiters. Choose a table, add menu items and send its order to the kitchen.</p>
+                        {captainToken && qrOrigin ? (
+                            <div className="space-y-3 rounded-xl border border-emerald-100 bg-emerald-50 p-3">
+                                <p className="text-xs font-bold text-emerald-900">Captain page URL</p>
+                                <a href={`/captain/${captainToken}`} target="_blank" rel="noopener noreferrer" className="block break-all text-xs font-medium text-emerald-800 underline underline-offset-2">{qrOrigin}/captain/{captainToken}</a>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <a href={`/captain/${captainToken}`} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-emerald-700 px-3 text-xs font-bold text-white"><ArrowTopRightOnSquareIcon className="h-4 w-4" /> Open page</a>
+                                    <button type="button" onClick={() => void copyCaptainLink()} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-white px-3 text-xs font-bold text-emerald-800"><ClipboardDocumentIcon className="h-4 w-4" /> Copy link</button>
+                                </div>
+                            </div>
+                        ) : (
+                            <Button disabled={loadingCaptainLink || !qrOrigin} onClick={() => void handleCreateCaptainLink()} className="flex min-h-12 w-full items-center justify-center gap-2 bg-emerald-700 text-white hover:bg-emerald-800 disabled:opacity-50">
+                                <UserGroupIcon className="h-5 w-5" /> {loadingCaptainLink ? 'Creating captain page…' : 'Create captain page URL'}
+                            </Button>
+                        )}
                     </section>
-                </div>
-            )}
+            </div>
 
             <div className="max-w-lg">
                 <label htmlFor="takeaway-base-url" className="block text-xs font-semibold text-gray-700">Website address for QR codes</label>
@@ -313,20 +334,6 @@ export function TableList({ initialTables, restaurantId }: { initialTables: Tabl
                                     <ArrowTopRightOnSquareIcon className="h-4 w-4 mr-2" />
                                     Open Table View
                                 </a>
-                                {captainTokens[table._id] ? (
-                                    <div className="space-y-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
-                                        <p className="text-xs font-bold text-emerald-900">Waiter captain link · Table {table.tableNumber}</p>
-                                        <a href={`/captain/${captainTokens[table._id]}`} target="_blank" rel="noopener noreferrer" className="block break-all text-xs font-medium text-emerald-800 underline underline-offset-2">{qrOrigin}/captain/{captainTokens[table._id]}</a>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            <a href={`/captain/${captainTokens[table._id]}`} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-emerald-700 px-3 text-xs font-bold text-white"><UserGroupIcon className="h-4 w-4" /> Open captain page</a>
-                                            <button type="button" onClick={() => void copyCaptainLink(table._id)} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-white px-3 text-xs font-bold text-emerald-800"><ClipboardDocumentIcon className="h-4 w-4" /> Copy link</button>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <button type="button" disabled={loadingCaptainTable === table._id || !qrOrigin} onClick={() => void handleCreateCaptainLink(table._id)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 text-sm font-bold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50">
-                                        <UserGroupIcon className="h-4 w-4" /> {loadingCaptainTable === table._id ? 'Creating link…' : 'Create captain link'}
-                                    </button>
-                                )}
                             </div>
                         </div>
                     );

@@ -5,6 +5,7 @@ import { randomBytes } from 'crypto';
 import { revalidatePath, updateTag } from 'next/cache';
 import { auth } from '@/lib/auth';
 import dbConnect from '@/lib/db';
+import Restaurant from '@/models/Restaurant';
 import Table from '@/models/Table';
 
 async function getRestaurantId() {
@@ -168,29 +169,24 @@ export async function toggleTableStatus(id: string) {
     }
 }
 
-/** Return the signed-in owner's private captain URL token for one active dine-in table. */
-export async function getCaptainLinkToken(id: string) {
+/** Return the signed-in owner's private waiter URL token for the whole restaurant. */
+export async function getCaptainLinkToken() {
     try {
         const restaurantId = await getRestaurantId();
         if (!restaurantId) return { success: false, error: 'Your session has expired. Sign in again.' };
-        if (!mongoose.Types.ObjectId.isValid(id)) return { success: false, error: 'Invalid table.' };
         await dbConnect();
 
-        const table = await Table.findOne({
-            _id: id,
-            restaurantId,
-            isTakeaway: { $ne: true },
-            isActive: true,
-        }).select('+captainToken');
-        if (!table) return { success: false, error: 'Active table not found. Check the table and try again.' };
+        const restaurant = await Restaurant.findById(restaurantId).select('+captainToken');
+        if (!restaurant) return { success: false, error: 'Restaurant not found.' };
 
-        if (!table.captainToken) {
-            table.captainToken = randomBytes(32).toString('hex');
-            await table.save();
+        if (!restaurant.captainToken) {
+            restaurant.captainToken = randomBytes(32).toString('hex');
+            await restaurant.save();
         }
-        return { success: true, token: table.captainToken };
+        revalidatePath('/dashboard/tables');
+        return { success: true, token: restaurant.captainToken };
     } catch (error) {
-        console.error('Get captain table link error:', error);
+        console.error('Get restaurant captain link error:', error);
         return { success: false, error: 'Could not create the captain link. Try again.' };
     }
 }
