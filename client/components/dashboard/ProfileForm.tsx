@@ -12,7 +12,6 @@ import {
     ShoppingBagIcon,
 } from '@heroicons/react/24/outline';
 import { saveRestaurantSocialLinks, updateRestaurant } from '@/app/actions/restaurant';
-import { uploadFile } from '@/app/actions/upload';
 import { RestaurantAddressField } from '@/components/RestaurantAddressField';
 
 interface RestaurantData {
@@ -158,9 +157,16 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
                     img.src = imageUrl;
                 });
                 if ('BarcodeDetector' in window) {
-                    const detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
-                    const barcodes = await detector.detect(img);
-                    rawValue = barcodes?.[0]?.rawValue || '';
+                    try {
+                        const detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
+                        const barcodes = await detector.detect(img);
+                        rawValue = barcodes?.find((barcode: { rawValue?: string }) =>
+                            barcode.rawValue?.toLowerCase().startsWith('upi://pay')
+                        )?.rawValue || barcodes?.[0]?.rawValue || '';
+                    } catch {
+                        // Some browsers expose BarcodeDetector but cannot decode
+                        // every image; continue with the JS QR decoder below.
+                    }
                 }
                 if (!rawValue) {
                     const { default: jsQR } = await import('jsqr');
@@ -171,7 +177,12 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
                     const context = canvas.getContext('2d', { willReadFrequently: true });
                     if (!context) throw new Error('Could not process that image. Try another photo.');
                     context.drawImage(img, 0, 0, canvas.width, canvas.height);
-                    rawValue = jsQR(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height)?.data || '';
+                    rawValue = jsQR(
+                        context.getImageData(0, 0, canvas.width, canvas.height).data,
+                        canvas.width,
+                        canvas.height,
+                        { inversionAttempts: 'attemptBoth' }
+                    )?.data || '';
                 }
             } finally {
                 URL.revokeObjectURL(imageUrl);
@@ -199,6 +210,11 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
             const extractedPn = params.get('pn') || '';
             const extractedMc = params.get('mc') || '';
             const extractedAid = params.get('aid') || '';
+            if (!extractedPa) {
+                toast.error('The QR does not contain a UPI ID');
+                setQrDecodeResult({ status: 'error', message: 'UPI ID was missing. Enter it manually or use another merchant QR.' });
+                return;
+            }
 
             // Auto-fill the form fields
             if (extractedPa) setUpiId(extractedPa);
@@ -233,40 +249,8 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
         const toastId = toast.loading('Saving changes...');
 
         try {
-            let finalLogoUrl = initialData.logoUrl || '';
-            let finalCoverUrl = initialData.coverImageUrl || '';
-
-            // 1. Upload Logo if a new file is chosen
-            if (logoFile) {
-                const uploadFormData = new FormData();
-                uploadFormData.append('file', logoFile);
-
-                const uploadRes = await uploadFile(uploadFormData);
-                if (uploadRes.success && uploadRes.url) {
-                    finalLogoUrl = uploadRes.url;
-                } else {
-                    toast.error(uploadRes.error || 'Failed to upload logo', { id: toastId });
-                    setIsSaving(false);
-                    return;
-                }
-            }
-
-            // Upload Cover if a new file is chosen
-            if (coverFile) {
-                const uploadFormData = new FormData();
-                uploadFormData.append('file', coverFile);
-
-                const uploadRes = await uploadFile(uploadFormData);
-                if (uploadRes.success && uploadRes.url) {
-                    finalCoverUrl = uploadRes.url;
-                } else {
-                    toast.error(uploadRes.error || 'Failed to upload cafe aesthetic photo', { id: toastId });
-                    setIsSaving(false);
-                    return;
-                }
-            }
-
-            // 2. Submit all changes using updateRestaurant Action
+            // Send only newly selected files. Existing data URLs stay in MongoDB
+            // and do not inflate every profile-save request.
             const submitData = new FormData();
             submitData.append('name', name);
             submitData.append('phone', phone);
@@ -284,24 +268,26 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
             submitData.append('gstPercentage', gstPercentage);
             submitData.append('sgstPercentage', sgstPercentage);
             submitData.append('packagingCharge', packagingCharge);
-            submitData.append('logoUrl', finalLogoUrl);
-            submitData.append('coverImageUrl', finalCoverUrl);
             submitData.append('enableAestheticDownloads', enableAestheticDownloads ? 'true' : 'false');
+            if (logoFile) submitData.append('logo', logoFile);
+            if (coverFile) submitData.append('cover', coverFile);
 
             const result = await updateRestaurant(submitData);
-            // Keep the social links on their dedicated serverless MongoDB path.
-            // Run it after the unrelated profile update so this is the final write.
-            const socialResult = await saveRestaurantSocialLinks(instagramUrl, googleReviewUrl);
-            if (!socialResult.success) {
-                toast.error(socialResult.error || 'Failed to save social links to MongoDB', { id: toastId });
+            if (!result.success) {
+                toast.error(result.error || 'Failed to save profile changes.', { id: toastId, duration: 6000 });
                 return;
             }
 
-            if (result.success) {
-                toast.success('Profile and social links saved successfully!', { id: toastId });
-            } else {
-                toast.error(`Social links were saved. Other profile settings failed: ${result.error || 'Failed to save changes'}`, { id: toastId, duration: 6000 });
+            setLogoFile(null);
+            setCoverFile(null);
+            // Social links use their dedicated direct-to-MongoDB save action.
+            const socialResult = await saveRestaurantSocialLinks(instagramUrl, googleReviewUrl);
+            if (!socialResult.success) {
+                toast.error(`Profile saved, but social links were not: ${socialResult.error || 'please save them separately.'}`, { id: toastId, duration: 6000 });
+                return;
             }
+
+            toast.success('Profile and social links saved successfully!', { id: toastId });
         } catch (error) {
             console.error('Error saving settings:', error);
             toast.error('An unexpected error occurred', { id: toastId });
@@ -511,6 +497,7 @@ export default function ProfileForm({ initialData }: { initialData: RestaurantDa
                                         <span className="font-semibold text-sky-600">Upload your merchant QR code</span>
                                     </p>
                                     <p className="text-xs text-slate-400 mt-1">We'll extract UPI ID, payee name & merchant code automatically</p>
+                                    <p className="text-xs text-slate-500 mt-2">After reviewing the fields below, click <span className="font-semibold">Save Changes</span> at the bottom to store them.</p>
                                     {qrDecodeResult.status === 'error' && (
                                         <p className="text-xs text-red-500 mt-2">{qrDecodeResult.message}</p>
                                     )}

@@ -2,7 +2,8 @@
 const nextConfig = {
     experimental: {
         serverActions: {
-            bodySizeLimit: '4mb',
+            // Profile saves may contain both a new logo and a new cover image.
+            bodySizeLimit: '5mb',
         },
     },
 };
