@@ -48,8 +48,8 @@ export function Cart({ cart, onClose, onUpdateQuantity, onPlaceOrder, isPlacingO
         if (!name.trim()) {
             newErrors.name = 'Name is required';
             isValid = false;
-        } else if (/\p{N}/u.test(name)) {
-            newErrors.name = 'Name cannot contain numbers';
+        } else if (name.trim().length > 120) {
+            newErrors.name = 'Name must be 120 characters or fewer';
             isValid = false;
         }
 
@@ -61,8 +61,8 @@ export function Cart({ cart, onClose, onUpdateQuantity, onPlaceOrder, isPlacingO
             isValid = false;
         }
 
-        if (instructions.trim() && !/^[\p{L}\p{M}\s]+$/u.test(instructions)) {
-            newErrors.instructions = 'Use letters and spaces only';
+        if (instructions.length > 500) {
+            newErrors.instructions = 'Use 500 characters or fewer';
             isValid = false;
         }
 
@@ -174,7 +174,8 @@ export function Cart({ cart, onClose, onUpdateQuantity, onPlaceOrder, isPlacingO
                                         id="cart-customer-name"
                                         placeholder="Enter name"
                                         value={name}
-                                        onChange={(e) => { setName(e.target.value.replace(/\p{N}/gu, '')); setErrors((current) => ({ ...current, name: '' })); }}
+                                        maxLength={120}
+                                        onChange={(e) => { setName(e.target.value); setErrors((current) => ({ ...current, name: '' })); }}
                                         type="text"
                                         inputMode="text"
                                         autoComplete="name"
@@ -207,14 +208,15 @@ export function Cart({ cart, onClose, onUpdateQuantity, onPlaceOrder, isPlacingO
                             <textarea
                                 className="w-full resize-none rounded-xl border px-4 py-3 text-base focus:ring-2 focus:ring-offset-0 transition-all"
                                 rows={2}
+                                maxLength={500}
                                 placeholder="Any special requests for the kitchen?"
                                 value={instructions}
-                                onChange={(e) => { setInstructions(e.target.value.replace(/[^\p{L}\p{M}\s]/gu, '')); setErrors((current) => ({ ...current, instructions: '' })); }}
+                                onChange={(e) => { setInstructions(e.target.value); setErrors((current) => ({ ...current, instructions: '' })); }}
                                 aria-label="Special requests for the kitchen"
                                 aria-invalid={!!errors.instructions}
                                 style={{ backgroundColor: theme.cardBg, borderColor: errors.instructions ? '#ef4444' : theme.border, color: theme.text }}
                             />
-                            <p className="text-[10px]" style={{ color: theme.subtext }}>Letters and spaces only</p>
+                            <p className="text-[10px]" style={{ color: theme.subtext }}>Optional · up to 500 characters</p>
                             {errors.instructions && <p className="text-red-500 text-[10px]">{errors.instructions}</p>}
                         </div>
 

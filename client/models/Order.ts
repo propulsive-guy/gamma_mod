@@ -40,6 +40,7 @@ export interface IOrder extends Document {
     items: IOrderItem[];
     inventoryUsage: { inventoryItemId: mongoose.Types.ObjectId; departmentId?: mongoose.Types.ObjectId; quantity: number; unitCost: number }[];
     inventoryRestored: boolean;
+    inventoryDeducted?: boolean;
     total: number;
     status: OrderStatus;
     sessionId: string;
@@ -125,6 +126,7 @@ const orderSchema = new Schema<IOrder>(
             select: false,
         },
         inventoryRestored: { type: Boolean, default: false, select: false },
+        inventoryDeducted: { type: Boolean, select: false },
         total: {
             type: Number,
             required: true,
