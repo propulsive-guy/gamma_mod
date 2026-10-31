@@ -201,7 +201,9 @@ export async function createOrder(data: any) {
         const activeSession = await mongoose.startSession();
         session = activeSession;
         await activeSession.withTransaction(async () => {
-            const restaurant = await Restaurant.findById(restaurantId).select('inventoryTrackingEnabled').session(activeSession);
+            const restaurant = await Restaurant.findById(restaurantId)
+                .select('inventoryTrackingEnabled gstPercentage sgstPercentage packagingCharge')
+                .session(activeSession);
             if (!restaurant) throw new Error('This restaurant is no longer available. Refresh the menu and try again.');
             const inventoryTrackingEnabled = restaurant.inventoryTrackingEnabled !== false;
 
@@ -259,12 +261,32 @@ export async function createOrder(data: any) {
                 };
             });
 
+            const gstRate = Math.max(0, Number(restaurant.gstPercentage) || 0);
+            const sgstRate = Math.max(0, Number(restaurant.sgstPercentage) || 0);
+            const packagingCharge = table.isTakeaway ? Math.max(0, Number(restaurant.packagingCharge) || 0) : 0;
+            const taxableSubtotal = roundMoney(total);
+            const gstAmount = roundMoney(taxableSubtotal * gstRate / 100);
+            const sgstAmount = roundMoney(taxableSubtotal * sgstRate / 100);
+            const checkout = {
+                couponCode: '',
+                discountAmount: 0,
+                tipAmount: 0,
+                packagingCharge: roundMoney(packagingCharge),
+                gstRate,
+                sgstRate,
+                gstAmount,
+                sgstAmount,
+                payableAmount: roundMoney(taxableSubtotal + gstAmount + sgstAmount + packagingCharge),
+                preparedAt: new Date(),
+            };
+
             const [order] = await Order.create([{
                 restaurantId,
                 tableId,
                 orderType: table.isTakeaway ? 'takeaway' : 'dine-in',
                 items: orderItems,
                 total: roundMoney(total),
+                checkout,
                 status: 'pending',
                 paymentStatus: 'pending',
                 sessionId,
@@ -347,7 +369,7 @@ export async function getOrders() {
         await dbConnect();
         const [recent, unpaid, takeaway] = await Promise.all([
             Order.find({ restaurantId }).sort({ createdAt: -1 }).limit(100).populate('tableId', 'tableNumber').lean(),
-            Order.find({ restaurantId, status: 'completed', paymentStatus: { $ne: 'paid' } })
+            Order.find({ restaurantId, status: { $ne: 'cancelled' }, paymentStatus: { $ne: 'paid' } })
                 .sort({ createdAt: -1 }).populate('tableId', 'tableNumber').lean(),
             Order.find({ restaurantId, orderType: 'takeaway' }).sort({ createdAt: -1 }).populate('tableId', 'tableNumber').lean(),
         ]);
@@ -394,7 +416,7 @@ export async function prepareCustomerCheckout(data: {
         await dbConnect();
         const order = await Order.findOne({ _id: data.orderId, tableId: data.tableId, sessionId: data.sessionId });
         if (!order) return { success: false, error: 'Order not found.' };
-        if (order.status !== 'completed') return { success: false, error: 'Payment opens once your order is complete.' };
+        if (order.status === 'cancelled') return { success: false, error: 'Cancelled orders cannot be paid.' };
         if (order.paymentStatus === 'paid') return { success: false, error: 'This order is already paid.' };
 
         const isTakeaway = order.orderType === 'takeaway';
@@ -470,11 +492,11 @@ export async function updatePaymentStatus(orderId: string, paymentStatus: 'paid'
         }
         await dbConnect();
         const order = await Order.findOneAndUpdate(
-            { _id: orderId, restaurantId, status: 'completed', paymentStatus: { $ne: 'paid' } },
+            { _id: orderId, restaurantId, status: { $ne: 'cancelled' }, paymentStatus: { $ne: 'paid' } },
             { $set: { paymentStatus: 'paid', paymentMethod, paidAt: new Date() } },
             { new: true },
         ).populate('tableId', 'tableNumber');
-        if (!order) return { success: false, error: 'Order must be completed and unpaid before recording payment.' };
+        if (!order) return { success: false, error: 'Order must be active and unpaid before recording payment.' };
         revalidatePath('/dashboard/orders');
         return { success: true, data: JSON.parse(JSON.stringify(order)) };
     } catch (error) {

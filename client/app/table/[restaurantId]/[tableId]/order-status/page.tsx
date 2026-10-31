@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import QRCode from 'qrcode';
-import { ArrowLeftIcon, ArrowRightIcon, ArrowTopRightOnSquareIcon, CheckIcon, ClockIcon, CreditCardIcon, HeartIcon, StarIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, ArrowRightIcon, ArrowTopRightOnSquareIcon, CheckIcon, CreditCardIcon, HeartIcon, StarIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { getTableVisit } from '@/lib/session';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { getPublicRestaurantInfo } from '@/app/actions/restaurant';
@@ -70,13 +70,6 @@ interface MenuItem {
     aestheticImageUrl?: string;
 }
 
-const steps = [
-    { key: 'pending', label: 'Placed', detail: 'Order received' },
-    { key: 'preparing', label: 'Preparing', detail: 'In the kitchen' },
-    { key: 'served', label: 'Served', detail: 'At your table' },
-    { key: 'completed', label: 'Complete', detail: 'Ready to pay' },
-] as const;
-
 const fontFamilies: Record<string, string> = {
     inter: 'Inter, sans-serif',
     outfit: 'Outfit, sans-serif',
@@ -122,6 +115,7 @@ export default function OrderStatusPage() {
     const [visitId, setVisitId] = useState<string | null>(null);
     const [thankYouOrder, setThankYouOrder] = useState<Order | null>(null);
     const seenPaidOrders = useRef(new Set<string>());
+    const autoCheckoutStarted = useRef(new Set<string>());
 
     useEffect(() => {
         if (paymentOrderId) window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -145,7 +139,7 @@ export default function OrderStatusPage() {
                 if (!mounted) return;
                 if (!result.success) throw new Error(result.error || 'Unable to load your order');
                 const freshPaidOrders = (result.orders as Order[]).filter((order) => {
-                    if (document.hidden || order.status !== 'completed' || order.paymentStatus !== 'paid' || seenPaidOrders.current.has(order._id)) return false;
+                    if (document.hidden || order.paymentStatus !== 'paid' || seenPaidOrders.current.has(order._id)) return false;
                     seenPaidOrders.current.add(order._id);
                     try {
                         const key = `payment_thanks:${currentVisit.visitId}:${order._id}`;
@@ -155,6 +149,11 @@ export default function OrderStatusPage() {
                     return true;
                 });
                 setOrders(result.orders);
+                const requestedPaymentId = new URLSearchParams(window.location.search).get('pay');
+                const requestedOrder = requestedPaymentId
+                    ? (result.orders as Order[]).find((order) => order._id === requestedPaymentId && order.status !== 'cancelled' && order.paymentStatus !== 'paid')
+                    : undefined;
+                if (requestedOrder) setPaymentOrderId(requestedOrder._id);
                 if (freshPaidOrders.length > 0) {
                     setThankYouOrder(freshPaidOrders[0]);
                     setPaymentOrderId(null);
@@ -302,7 +301,7 @@ export default function OrderStatusPage() {
         setReviewOrder(null);
     };
 
-    const startPayment = (order: Order) => {
+    const startPayment = useCallback((order: Order) => {
         setCheckoutError('');
         setPaymentOrderId(order._id);
         if (order.checkout && typeof order.checkout.payableAmount === 'number') return;
@@ -344,7 +343,19 @@ export default function OrderStatusPage() {
         }).catch((error) => {
             console.error('Could not persist checkout before UPI payment; keeping the locally calculated bill visible.', error);
         }).finally(() => setPreparingPaymentOrderId(null));
-    };
+    }, [isTakeaway, restaurant?.gstPercentage, restaurant?.packagingCharge, restaurant?.sgstPercentage, sessionId, tableId]);
+
+    useEffect(() => {
+        const requestedPaymentId = new URLSearchParams(window.location.search).get('pay');
+        if (!requestedPaymentId || !orders.length) return;
+        const order = orders.find((candidate) => candidate._id === requestedPaymentId && candidate.status !== 'cancelled' && candidate.paymentStatus !== 'paid');
+        if (!order) return;
+        setPaymentOrderId(order._id);
+        if (!order.checkout && restaurant && !autoCheckoutStarted.current.has(order._id)) {
+            autoCheckoutStarted.current.add(order._id);
+            startPayment(order);
+        }
+    }, [orders, restaurant, startPayment]);
 
     const orderedNames = new Set(orders.filter((order) => order.status !== 'cancelled')
         .flatMap((order) => order.items.map((item) => item.name.toLowerCase().trim())));
@@ -356,9 +367,10 @@ export default function OrderStatusPage() {
             ? { ...order, checkout: localCheckouts[order._id] }
             : order
     );
-    const paymentOrder = effectiveOrders.find((order) => order._id === paymentOrderId && order.status === 'completed' && order.paymentStatus !== 'paid' && typeof order.checkout?.payableAmount === 'number');
-    const visitFullyPaid = orders.some((order) => order.status === 'completed' && order.paymentStatus === 'paid') &&
-        orders.every((order) => order.status === 'cancelled' || (order.status === 'completed' && order.paymentStatus === 'paid'));
+    const paymentOrder = effectiveOrders.find((order) => order._id === paymentOrderId && order.status !== 'cancelled' && order.paymentStatus !== 'paid' && typeof order.checkout?.payableAmount === 'number');
+    const visitFullyPaid = orders.length > 0 && orders.some((order) => order.paymentStatus === 'paid') &&
+        orders.every((order) => order.status === 'cancelled' || order.paymentStatus === 'paid');
+    const customerOrders = effectiveOrders.filter((order) => order.status !== 'cancelled');
 
     if (loading) {
         return <div className="min-h-screen grid place-items-center bg-[#f7f7f4]"><div className="h-10 w-10 animate-spin rounded-full border-2 border-zinc-200 border-t-zinc-800" aria-label="Loading orders" /></div>;
@@ -373,7 +385,7 @@ export default function OrderStatusPage() {
                             <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl text-lg font-bold" style={{ backgroundColor: accent, color: accentText }}>{restaurant?.name?.charAt(0) || 'B'}</div>}
                         <div className="min-w-0">
                             <p className="truncate text-sm font-bold">{restaurant?.name || 'Your restaurant'}</p>
-                            <p className="text-xs text-zinc-500">{isTakeaway ? 'Your takeaway order' : 'Your table experience'}</p>
+                            <p className="text-xs text-zinc-500">{isTakeaway ? 'Your takeaway bill' : 'Your table bill'}</p>
                         </div>
                     </div>
                     <Link href={tableUrl} className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold hover:bg-zinc-50">
@@ -385,10 +397,15 @@ export default function OrderStatusPage() {
             <main className="mx-auto max-w-3xl space-y-5 px-4 pb-8 pt-5 sm:px-6">
                 {paymentOrder && paymentOrder.checkout ? (
                     <section className="space-y-5">
-                        <button type="button" onClick={() => setPaymentOrderId(null)} className="inline-flex items-center gap-2 text-sm font-semibold text-zinc-600 hover:text-zinc-900"><ArrowLeftIcon className="h-4 w-4" /> Back to order status</button>
+                        <button type="button" onClick={() => {
+                            setPaymentOrderId(null);
+                            const url = new URL(window.location.href);
+                            url.searchParams.delete('pay');
+                            window.history.replaceState(window.history.state, '', url);
+                        }} className="inline-flex items-center gap-2 text-sm font-semibold text-zinc-600 hover:text-zinc-900"><ArrowLeftIcon className="h-4 w-4" /> Back to bill</button>
                         <div className="rounded-[30px] bg-zinc-900 px-7 py-8 text-white sm:px-9">
-                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">Your final step</p>
-                            <h1 className="mt-2 text-3xl font-bold tracking-tight">{isTakeaway ? 'Ready to take away? Let us settle up.' : 'Enjoyed your meal? Let us settle up.'}</h1>
+                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">Payment</p>
+                            <h1 className="mt-2 text-3xl font-bold tracking-tight">{isTakeaway ? 'Complete your takeaway payment.' : 'Complete your table payment.'}</h1>
                             <p className="mt-2 max-w-lg text-sm text-white/70">Payment for order #{paymentOrder._id.slice(-6).toUpperCase()} at {restaurant?.name || 'your restaurant'}.</p>
                         </div>
                         <UPIPaymentSection restaurant={restaurant} amount={paymentOrder.checkout.payableAmount} orderId={paymentOrder._id} accent={accent} />
@@ -412,8 +429,8 @@ export default function OrderStatusPage() {
                     <div className="absolute inset-0 bg-gradient-to-r from-zinc-950/85 to-zinc-950/25" />
                     <div className="relative">
                         <span className="rounded-full border border-white/30 bg-white/10 px-3 py-1 text-xs font-semibold backdrop-blur">{isTakeaway ? 'Takeaway · Your order' : 'Dine in · Your order'}</span>
-                        <h1 className="mt-5 text-3xl font-bold tracking-tight sm:text-4xl">{visitFullyPaid ? 'Thank you for joining us.' : orders.length ? 'Good things are on their way.' : isTakeaway ? 'Ready when you are.' : 'Your table is ready.'}</h1>
-                        <p className="mt-2 max-w-lg text-sm leading-relaxed text-white/75">{visitFullyPaid ? `Your payment has been received. We hope to welcome you back to ${restaurant?.name || 'our restaurant'} soon.` : orders.length ? isTakeaway ? 'Follow each step. We will have your order ready for pickup soon.' : `Follow each step, settle up when your meal is complete, and enjoy the time at ${restaurant?.name || 'your table'}.` : 'Your orders will appear here once you place them.'}</p>
+                        <h1 className="mt-5 text-3xl font-bold tracking-tight sm:text-4xl">{visitFullyPaid ? 'Thank you for joining us.' : customerOrders.length ? 'Your bill is ready.' : isTakeaway ? 'Ready when you are.' : 'Your table is ready.'}</h1>
+                        <p className="mt-2 max-w-lg text-sm leading-relaxed text-white/75">{visitFullyPaid ? `Your payment has been received. We hope to welcome you back to ${restaurant?.name || 'our restaurant'} soon.` : customerOrders.length ? 'Your order has been sent to the restaurant. Review the bill and complete payment below.' : 'Your orders will appear here once you place them.'}</p>
                     </div>
                 </section>
 
@@ -424,13 +441,12 @@ export default function OrderStatusPage() {
                 <div className="flex items-end justify-between px-1 pt-3">
                     <div>
                         <p className="text-xs font-bold uppercase tracking-[0.18em]" style={{ color: accent }}>{isTakeaway ? 'Your pickup' : 'At your table'}</p>
-                        <h2 className="mt-1 text-2xl font-bold tracking-tight">Your orders</h2>
+                        <h2 className="mt-1 text-2xl font-bold tracking-tight">Your bill</h2>
                     </div>
-                    <span className="text-xs text-zinc-500">{orders.length} {orders.length === 1 ? 'order' : 'orders'}</span>
+                    <span className="text-xs text-zinc-500">{customerOrders.length} {customerOrders.length === 1 ? 'order' : 'orders'}</span>
                 </div>
 
-                {effectiveOrders.map((order) => {
-                    const currentStep = steps.findIndex((step) => step.key === order.status);
+                {customerOrders.map((order) => {
                     const checkout = order.checkout;
                     const hasCheckout = typeof checkout?.payableAmount === 'number';
                     const originalTax = roundMoney(order.total * (Number(restaurant?.gstPercentage || 0) + Number(restaurant?.sgstPercentage || 0)) / 100);
@@ -442,36 +458,10 @@ export default function OrderStatusPage() {
                                 <div className="flex flex-wrap items-start justify-between gap-3">
                                     <div>
                                         <p className="text-xs font-semibold uppercase tracking-[0.15em] text-zinc-400">Order #{order._id.slice(-6).toUpperCase()}</p>
-                                        <h3 className="mt-1 text-lg font-bold">{order.status === 'completed' ? 'Made with care, ready for you.' : order.status === 'cancelled' ? 'Order cancelled' : 'We have got your order.'}</h3>
+                                        <h3 className="mt-1 text-lg font-bold">Order details</h3>
                                         <p className="mt-1 text-xs text-zinc-500">{formatDate(order.createdAt)}</p>
                                     </div>
-                                    <span className="rounded-full px-3 py-1.5 text-xs font-bold capitalize" style={{ backgroundColor: order.status === 'cancelled' ? '#fee2e2' : accent + '18', color: order.status === 'cancelled' ? '#b91c1c' : accent }}>{isTakeaway && order.status === 'served' ? 'Ready for pickup' : order.status}</span>
                                 </div>
-
-                                {order.status !== 'cancelled' && (
-                                    <div className="mt-8">
-                                        <div className="relative grid grid-cols-4">
-                                            <div className="absolute left-[12.5%] right-[12.5%] top-[17px] h-1 rounded-full bg-zinc-100" />
-                                            <div className="absolute left-[12.5%] top-[17px] h-1 rounded-full transition-all duration-700" style={{ width: String(Math.max(0, currentStep) * 25) + '%', backgroundColor: accent }} />
-                                            {steps.map((step, index) => (
-                                                <div key={step.key} className="relative flex flex-col items-center text-center">
-                                                    <div className="grid h-9 w-9 place-items-center rounded-full border-2 bg-white transition-all duration-500" style={{ borderColor: index <= currentStep ? accent : '#e4e4e7', backgroundColor: index < currentStep ? accent : 'white', color: index < currentStep ? accentText : index === currentStep ? '#18181b' : '#a1a1aa' }}>
-                                                        {index < currentStep ? <CheckIcon className="h-4 w-4 stroke-[3]" /> : <span className="text-xs font-bold">{index + 1}</span>}
-                                                    </div>
-                                                    <span className="mt-2 text-[11px] font-semibold sm:text-xs" style={{ color: index <= currentStep ? '#18181b' : '#a1a1aa' }}>{isTakeaway && step.key === 'served' ? 'Ready' : step.label}</span>
-                                                    <span className="mt-0.5 hidden text-[10px] text-zinc-400 sm:block">{isTakeaway && step.key === 'served' ? 'Collect at counter' : step.detail}</span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                        <div className="mt-6 flex items-center gap-2 rounded-2xl bg-zinc-50 px-4 py-3 text-xs text-zinc-600">
-                                            <ClockIcon className="h-4 w-4 shrink-0" style={{ color: accent }} />
-                                            {order.status === 'pending' ? 'The kitchen has your order and will begin shortly.' :
-                                                order.status === 'preparing' ? 'Your food is being prepared fresh.' :
-                                                order.status === 'served' ? isTakeaway ? 'Your order is ready for pickup. Payment opens after staff complete the order.' : 'Enjoy your meal. Payment opens after staff complete the order.' :
-                                                'Your order is complete. You can now continue to payment.'}
-                                        </div>
-                                    </div>
-                                )}
 
                                 <div className="mt-7 border-t border-zinc-100 pt-5">
                                     <p className="mb-3 text-xs font-bold uppercase tracking-[0.14em] text-zinc-400">Your selection</p>
@@ -496,7 +486,7 @@ export default function OrderStatusPage() {
                             </div>
 
                             <div className="border-t border-zinc-100 bg-zinc-50/80 p-5 sm:px-7">
-                                {order.status === 'completed' && order.paymentStatus === 'paid' ? (
+                                {order.paymentStatus === 'paid' ? (
                                     <>
                                         <div className="flex flex-wrap items-center justify-between gap-3">
                                             <div className="flex items-center gap-2 font-semibold" style={{ color: accent }}><CheckIcon className="h-5 w-5" /> Payment received. Thank you! Please come again.</div>
@@ -525,26 +515,24 @@ export default function OrderStatusPage() {
                                             )}
                                         </div>
                                     </>
-                                ) : order.status === 'completed' ? (
+                                ) : (
                                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                             <div>
-                                                <p className="text-sm font-bold">Ready when you are</p>
-                                                <p className="mt-1 text-xs text-zinc-500">Open your UPI app or scan a QR with this bill amount.</p>
+                                                <p className="text-sm font-bold">Payment is ready</p>
+                                                <p className="mt-1 text-xs text-zinc-500">Open your UPI app or scan the QR for this bill.</p>
                                             </div>
                                             <button type="button" onClick={() => startPayment(order)} className="inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-sm font-bold transition hover:opacity-90" style={{ backgroundColor: accent, color: accentText }}>
                                                 <CreditCardIcon className="h-5 w-5" /> {preparingPaymentOrderId === order._id ? 'Preparing bill…' : hasCheckout ? 'View payment' : restaurant?.upiId ? 'Pay via UPI' : 'View final bill'}
                                                 <ArrowRightIcon className="h-4 w-4" />
                                             </button>
                                     </div>
-                                ) : (
-                                    <div className="flex items-center gap-2 text-xs font-medium text-zinc-500"><ClockIcon className="h-4 w-4" /> Checkout unlocks after your order is complete.</div>
                                 )}
                             </div>
                         </article>
                     );
                 })}
 
-                {orders.length === 0 && !error && (
+                {customerOrders.length === 0 && !error && (
                     <div className="rounded-[28px] border border-zinc-200 bg-white px-6 py-14 text-center shadow-sm">
                         <p className="text-lg font-bold">No orders for this visit yet.</p>
                         <p className="mt-2 text-sm text-zinc-500">Explore the menu and place your first order. Earlier visits stay private.</p>

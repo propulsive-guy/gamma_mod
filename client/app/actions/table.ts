@@ -1,6 +1,7 @@
 'use server';
 
 import mongoose from 'mongoose';
+import { randomBytes } from 'crypto';
 import { revalidatePath, updateTag } from 'next/cache';
 import { auth } from '@/lib/auth';
 import dbConnect from '@/lib/db';
@@ -164,5 +165,32 @@ export async function toggleTableStatus(id: string) {
     } catch (error) {
         console.error('Toggle table status error:', error);
         return { success: false, error: 'Could not update the table. Try again.' };
+    }
+}
+
+/** Return the signed-in owner's private captain URL token for one active dine-in table. */
+export async function getCaptainLinkToken(id: string) {
+    try {
+        const restaurantId = await getRestaurantId();
+        if (!restaurantId) return { success: false, error: 'Your session has expired. Sign in again.' };
+        if (!mongoose.Types.ObjectId.isValid(id)) return { success: false, error: 'Invalid table.' };
+        await dbConnect();
+
+        const table = await Table.findOne({
+            _id: id,
+            restaurantId,
+            isTakeaway: { $ne: true },
+            isActive: true,
+        }).select('+captainToken');
+        if (!table) return { success: false, error: 'Active table not found. Check the table and try again.' };
+
+        if (!table.captainToken) {
+            table.captainToken = randomBytes(32).toString('hex');
+            await table.save();
+        }
+        return { success: true, token: table.captainToken };
+    } catch (error) {
+        console.error('Get captain table link error:', error);
+        return { success: false, error: 'Could not create the captain link. Try again.' };
     }
 }

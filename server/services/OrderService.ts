@@ -43,8 +43,9 @@ export class OrderService {
         try {
             await session.withTransaction(async () => {
                 const restaurant = await Restaurant.findById(data.restaurantId)
-                    .select('inventoryTrackingEnabled').session(session);
-                const inventoryTrackingEnabled = restaurant?.inventoryTrackingEnabled !== false;
+                    .select('inventoryTrackingEnabled gstPercentage sgstPercentage packagingCharge').session(session);
+                if (!restaurant) throw new OrderInputError('This restaurant is no longer available. Refresh the menu and try again.');
+                const inventoryTrackingEnabled = restaurant.inventoryTrackingEnabled !== false;
                 if (inventoryTrackingEnabled) {
                     await seedLegacyKitchenLots({ Lot: KitchenStockLot, KitchenStock, InventoryItem }, data.restaurantId, session);
                     await expireDueKitchenLots({ Lot: KitchenStockLot, KitchenStock, StockMovement }, data.restaurantId, session);
@@ -84,12 +85,32 @@ export class OrderService {
                     };
                 });
 
+                const gstRate = Math.max(0, Number(restaurant.gstPercentage) || 0);
+                const sgstRate = Math.max(0, Number(restaurant.sgstPercentage) || 0);
+                const packagingCharge = table.isTakeaway ? Math.max(0, Number(restaurant.packagingCharge) || 0) : 0;
+                const subtotal = Math.round((calculatedTotal + Number.EPSILON) * 100) / 100;
+                const gstAmount = Math.round((subtotal * gstRate / 100 + Number.EPSILON) * 100) / 100;
+                const sgstAmount = Math.round((subtotal * sgstRate / 100 + Number.EPSILON) * 100) / 100;
+                const checkout = {
+                    couponCode: '',
+                    discountAmount: 0,
+                    tipAmount: 0,
+                    packagingCharge: Math.round((packagingCharge + Number.EPSILON) * 100) / 100,
+                    gstRate,
+                    sgstRate,
+                    gstAmount,
+                    sgstAmount,
+                    payableAmount: Math.round((subtotal + gstAmount + sgstAmount + packagingCharge + Number.EPSILON) * 100) / 100,
+                    preparedAt: new Date(),
+                };
+
                 const [order] = await Order.create([{
                     restaurantId: data.restaurantId,
                     tableId: data.tableId,
                     orderType: table.isTakeaway ? 'takeaway' : 'dine-in',
                     items: orderItems,
                     total: calculatedTotal,
+                    checkout,
                     status: 'pending',
                     paymentStatus: 'pending',
                     sessionId: data.sessionId,
@@ -179,13 +200,13 @@ export class OrderService {
             .lean() as unknown as IOrder[];
     }
 
-    /** Keep every outstanding completed bill in the dashboard, even when it is older than recent orders. */
+    /** Keep every outstanding bill in the dashboard, even when it is older than recent orders. */
     static async getDashboardOrders(restaurantId: string): Promise<IOrder[]> {
         if (!mongoose.Types.ObjectId.isValid(restaurantId)) return [];
 
         const [recent, unpaid, takeaway] = await Promise.all([
             this.getRestaurantOrders(restaurantId, 100),
-            Order.find({ restaurantId, status: 'completed', paymentStatus: { $ne: 'paid' } })
+            Order.find({ restaurantId, status: { $ne: 'cancelled' }, paymentStatus: { $ne: 'paid' } })
                 .sort({ createdAt: -1 })
                 .populate('tableId', 'tableNumber')
                 .lean() as unknown as Promise<IOrder[]>,
@@ -295,7 +316,7 @@ export class OrderService {
             return null;
         }
         return Order.findOneAndUpdate(
-            { _id: orderId, restaurantId, status: 'completed', paymentStatus: { $ne: 'paid' } },
+            { _id: orderId, restaurantId, status: { $ne: 'cancelled' }, paymentStatus: { $ne: 'paid' } },
             { $set: { paymentStatus: 'paid', paymentMethod, paidAt: new Date() } },
             { new: true }
         );

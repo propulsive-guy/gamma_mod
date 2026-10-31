@@ -52,10 +52,12 @@ export function CustomerMenu({
     restaurant,
     table,
     menuItems,
+    captainMode = false,
 }: {
     restaurant: Restaurant;
     table: Table;
     menuItems: MenuItem[];
+    captainMode?: boolean;
 }) {
     const router = useRouter();
     const [cart, setCart] = useState<CartItem[]>([]);
@@ -209,7 +211,7 @@ export function CustomerMenu({
                 toast.success('Order placed successfully!');
                 setCart([]);
                 setShowCart(false);
-                router.push(`/table/${restaurant._id}/${table._id}/order-status?visit=${currentVisit.visitId}`);
+                router.push(`/table/${restaurant._id}/${table._id}/order-status?visit=${currentVisit.visitId}&pay=${encodeURIComponent(result.data._id)}`);
             } else {
                 toast.error(result.error || 'Failed to place order');
             }
@@ -234,13 +236,13 @@ export function CustomerMenu({
                                 <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl text-lg font-bold" style={{ backgroundColor: accent, color: accentText }}>{restaurant.name.charAt(0)}</div>
                             )}
                             <div className="min-w-0">
-                                <p className="text-[10px] font-bold uppercase tracking-[0.2em]" style={{ color: accent }}>{table.isTakeaway ? 'Order to go' : 'At your table'}</p>
+                                <p className="text-[10px] font-bold uppercase tracking-[0.2em]" style={{ color: accent }}>{captainMode ? `Waiter · Table ${table.tableNumber}` : table.isTakeaway ? 'Order to go' : 'At your table'}</p>
                                 <h1 className="truncate text-[15px] font-bold leading-tight sm:text-base">{restaurant.name}</h1>
                             </div>
                         </div>
-                        <Link href={trackHref} aria-label="Track your order" className="inline-flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-full border px-3 text-xs font-semibold transition active:scale-95 sm:px-4" style={{ borderColor: t.border, backgroundColor: t.cardBg, color: t.text }}>
-                            <ClockIcon className="h-4 w-4" /><span className="hidden min-[360px]:inline">Track order</span>
-                        </Link>
+                        {!captainMode && <Link href={trackHref} aria-label="View your bill" className="inline-flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-full border px-3 text-xs font-semibold transition active:scale-95 sm:px-4" style={{ borderColor: t.border, backgroundColor: t.cardBg, color: t.text }}>
+                            <ClockIcon className="h-4 w-4" /><span className="hidden min-[360px]:inline">View bill</span>
+                        </Link>}
                     </div>
                 </header>
 
@@ -256,7 +258,7 @@ export function CustomerMenu({
                             <div className="max-w-2xl pb-1">
                                 <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/75">{table.isTakeaway ? 'Your favourites, ready to go' : 'A meal worth slowing down for'}</p>
                                 <h2 className="mt-3 max-w-xl text-[clamp(2.25rem,8vw,5rem)] font-semibold leading-[1.02] tracking-tight">Welcome to<br /><span className="font-serif italic">{restaurant.name}</span></h2>
-                                <p className="mt-4 max-w-lg text-sm leading-relaxed text-white/85 sm:text-base">{restaurant.description || (table.isTakeaway ? 'Explore the menu, place your order and follow along until it is ready for pickup.' : 'Your table is ready. Explore the menu, find something lovely, and let us take care of the rest.')}</p>
+                                <p className="mt-4 max-w-lg text-sm leading-relaxed text-white/85 sm:text-base">{captainMode ? `Place an order for Table ${table.tableNumber}. The bill opens as soon as the order is sent.` : restaurant.description || (table.isTakeaway ? 'Explore the menu and place your order for pickup.' : 'Your table is ready. Explore the menu, find something lovely, and let us take care of the rest.')}</p>
                                 <a href="#menu" className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-bold text-zinc-900 transition active:scale-95">Explore the menu <ArrowRightIcon className="h-4 w-4" /></a>
                             </div>
                         </div>

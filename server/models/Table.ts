@@ -6,6 +6,7 @@ export interface ITable extends Document {
     qrCodeDataUrl?: string;
     isActive: boolean;
     isTakeaway: boolean;
+    captainToken?: string;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -34,6 +35,10 @@ const tableSchema = new Schema<ITable>(
             type: Boolean,
             default: false,
         },
+        captainToken: {
+            type: String,
+            select: false,
+        },
     },
     {
         timestamps: true,
@@ -42,6 +47,7 @@ const tableSchema = new Schema<ITable>(
 
 // Ensure unique table numbers within a restaurant
 tableSchema.index({ restaurantId: 1, tableNumber: 1 }, { unique: true });
+tableSchema.index({ captainToken: 1 }, { unique: true, sparse: true });
 
 const Table: Model<ITable> =
     mongoose.models.Table || mongoose.model<ITable>('Table', tableSchema);

@@ -47,22 +47,11 @@ interface Restaurant {
     phone?: string;
 }
 
-const STATUS_CONFIG = {
-    pending: { label: 'Pending', bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200', bar: 'bg-amber-400' },
-    preparing: { label: 'Preparing', bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200', bar: 'bg-blue-400' },
-    served: { label: 'Served', bg: 'bg-violet-50', text: 'text-violet-700', border: 'border-violet-200', bar: 'bg-violet-400' },
-    completed: { label: 'Completed', bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200', bar: 'bg-emerald-400' },
-    cancelled: { label: 'Cancelled', bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200', bar: 'bg-red-400' },
-};
-
 const FILTER_TABS = [
-    { key: 'all', label: 'Active' },
+    { key: 'all', label: 'Active orders' },
     { key: 'takeaway', label: 'Takeaway' },
-    { key: 'pending', label: 'Pending' },
-    { key: 'preparing', label: 'Preparing' },
-    { key: 'served', label: 'Served' },
-    { key: 'unpaid', label: 'Unpaid' },
-    { key: 'completed', label: 'Completed' },
+    { key: 'unpaid', label: 'To collect' },
+    { key: 'past', label: 'Past orders' },
     { key: 'swiggy', label: 'Swiggy' },
     { key: 'zomato', label: 'Zomato' },
     { key: 'porter', label: 'Porter' },
@@ -74,8 +63,8 @@ const INTEGRATION_LABELS: Record<string, string> = {
     porter: 'Porter',
 };
 
-const isCompletedUnpaid = (order: Order) => order.status === 'completed' && order.paymentStatus !== 'paid';
-const isActiveTakeaway = (order: Order) => order.orderType === 'takeaway' && order.paymentStatus !== 'paid' && order.status !== 'cancelled';
+const isUnpaidOrder = (order: Order) => order.status !== 'cancelled' && order.paymentStatus !== 'paid';
+const isActiveTakeaway = (order: Order) => order.orderType === 'takeaway' && !['completed', 'cancelled'].includes(order.status);
 
 export function OrdersList({ initialOrders, restaurant }: { initialOrders: Order[], restaurant: Restaurant }) {
     const [orders, setOrders] = useState<Order[]>(initialOrders);
@@ -154,9 +143,9 @@ export function OrdersList({ initialOrders, restaurant }: { initialOrders: Order
 
         const result = await updateOrderStatus(orderId, newStatus);
         if (result.success) {
-            toast.success('Order status updated');
+            toast.success('Order updated');
         } else {
-            toast.error(result.error || 'Failed to update status');
+            toast.error(result.error || 'Failed to update order');
             const refresh = await getOrders();
             if (refresh.success && refresh.data) {
                 setOrders(refresh.data);
@@ -188,19 +177,17 @@ export function OrdersList({ initialOrders, restaurant }: { initialOrders: Order
         setIsBillModalOpen(true);
     };
 
-    const unpaidCount = orders.filter((order) => order.orderType !== 'takeaway' && isCompletedUnpaid(order)).length;
+    const unpaidCount = orders.filter(isUnpaidOrder).length;
     const takeawayCount = orders.filter(isActiveTakeaway).length;
     const filteredOrders = orders.filter((order) => {
         if (filter in INTEGRATION_LABELS) return order.source === filter;
         if (filter === 'takeaway') return isActiveTakeaway(order);
-        if (filter === 'completed' && order.orderType === 'takeaway') {
-            return order.status === 'completed' && order.paymentStatus === 'paid';
-        }
-        if (order.orderType === 'takeaway') return false;
         if (filter === 'all') {
-            return !['completed', 'cancelled'].includes(order.status);
+            return order.orderType !== 'takeaway' && !['completed', 'cancelled'].includes(order.status);
         }
-        if (filter === 'unpaid') return isCompletedUnpaid(order);
+        if (filter === 'past') return ['completed', 'cancelled'].includes(order.status);
+        if (filter === 'unpaid') return isUnpaidOrder(order);
+        if (order.orderType === 'takeaway') return false;
         return order.status === filter;
     });
 
@@ -229,28 +216,19 @@ export function OrdersList({ initialOrders, restaurant }: { initialOrders: Order
             {/* Orders Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
                 {filteredOrders.map((order) => {
-                    const statusConfig = STATUS_CONFIG[order.status];
                     return (
                         <div
                             key={order._id}
                             id={`order-${order._id}`}
                             className="bg-white border border-slate-200/60 rounded-2xl overflow-hidden hover:shadow-md hover:shadow-slate-200/50 transition-all duration-300"
                         >
-                            {/* Status Bar */}
-                            <div className={`h-1 ${statusConfig.bar}`} />
-
                             {/* Header */}
                             <div className="px-5 pt-4 pb-3">
                                 <div className="flex items-start justify-between">
                                     <div>
-                                        <div className="flex items-center gap-2.5">
-                                            <h3 className="text-base font-bold text-slate-900">
-                                                {order.orderType === 'takeaway' ? 'Takeaway' : `Table ${order.tableId?.tableNumber || 'N/A'}`}
-                                            </h3>
-                                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider ${statusConfig.bg} ${statusConfig.text}`}>
-                                                {order.orderType === 'takeaway' && order.status === 'served' ? 'Ready for pickup' : statusConfig.label}
-                                            </span>
-                                        </div>
+                                        <h3 className="text-base font-bold text-slate-900">
+                                            {order.orderType === 'takeaway' ? 'Takeaway' : `Table ${order.tableId?.tableNumber || 'N/A'}`}
+                                        </h3>
                                         <div className="mt-1.5 text-xs text-slate-500 space-y-0.5">
                                             <p><span className="font-semibold text-slate-700">{order.customerName || 'Guest'}</span>{order.customerPhone ? <span className="font-semibold text-slate-700"> · {order.customerPhone}</span> : ''}</p>
                                             <p>{formatDate(order.createdAt)}</p>
@@ -315,7 +293,7 @@ export function OrdersList({ initialOrders, restaurant }: { initialOrders: Order
                                 </button>
                                 <button type="button" onClick={() => setKotOrder(order)} className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100" title="View and print kitchen order ticket">KOT</button>
 
-                                {isCompletedUnpaid(order) && (
+                                {isUnpaidOrder(order) && (
                                     <button
                                         onClick={() => setPaymentOrderId(paymentOrderId === order._id ? null : order._id)}
                                         aria-expanded={paymentOrderId === order._id}
@@ -326,7 +304,7 @@ export function OrdersList({ initialOrders, restaurant }: { initialOrders: Order
                                     </button>
                                 )}
 
-                                {paymentOrderId === order._id && isCompletedUnpaid(order) && (
+                                {paymentOrderId === order._id && isUnpaidOrder(order) && (
                                     <div className="w-full rounded-xl border border-sky-200 bg-sky-50 p-3">
                                         <p className="mb-2 text-xs font-semibold text-slate-700">How did the customer pay?</p>
                                         <div className="flex gap-2">
@@ -381,9 +359,9 @@ export function OrdersList({ initialOrders, restaurant }: { initialOrders: Order
             {filteredOrders.length === 0 && (
                 <div className="text-center py-16 bg-white border border-slate-200/60 rounded-2xl">
                     <ClipboardDocumentListIcon className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                    <h3 className="text-sm font-semibold text-slate-900">{filter in INTEGRATION_LABELS ? `No ${INTEGRATION_LABELS[filter]} orders yet` : filter === 'unpaid' ? 'No completed unpaid orders' : filter === 'takeaway' ? 'No unpaid takeaway orders' : 'No orders found'}</h3>
+                    <h3 className="text-sm font-semibold text-slate-900">{filter in INTEGRATION_LABELS ? `No ${INTEGRATION_LABELS[filter]} orders yet` : filter === 'unpaid' ? 'Nothing to collect' : filter === 'takeaway' ? 'No active takeaway orders' : filter === 'past' ? 'No past orders' : 'No orders found'}</h3>
                     <p className="text-slate-400 mt-1 text-sm">
-                        {filter in INTEGRATION_LABELS ? `${INTEGRATION_LABELS[filter]} orders will appear here once connected.` : filter === 'unpaid' ? 'Completed orders awaiting payment will appear here.' : filter === 'takeaway' ? 'Paid takeaway orders move to Completed.' : 'Orders will appear here once customers place them.'}
+                        {filter in INTEGRATION_LABELS ? `${INTEGRATION_LABELS[filter]} orders will appear here once connected.` : filter === 'unpaid' ? 'Unpaid bills will appear here as soon as an order is placed.' : filter === 'takeaway' ? 'Open takeaway orders will appear here until they are finished.' : filter === 'past' ? 'Completed or cancelled orders will appear here.' : 'Orders will appear here once customers place them.'}
                     </p>
                 </div>
             )}

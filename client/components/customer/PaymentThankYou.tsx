@@ -76,7 +76,7 @@ export function PaymentThankYou({ order, restaurantName, restaurantAddress, rest
         };
     }, [onClose]);
 
-    if (order.status !== 'completed' || order.paymentStatus !== 'paid') return null;
+    if (order.paymentStatus !== 'paid') return null;
 
     return (
         <div

@@ -75,7 +75,7 @@ export class OrderController {
 
             const order = await OrderService.updatePaymentStatus(orderId as string, user.restaurantId.toString(), paymentMethod);
             if (!order) {
-                return res.status(409).json({ error: 'Order must be completed and unpaid before recording payment' });
+                return res.status(409).json({ error: 'Order must be active and unpaid before recording payment' });
             }
 
             await order.populate('tableId', 'tableNumber');
@@ -145,7 +145,7 @@ export class OrderController {
         }
     }
 
-    /** Prepare a customer checkout only after the order is complete. */
+    /** Prepare a customer checkout immediately after an order is placed. */
     static async prepareCheckout(req: Request, res: Response) {
         try {
             const orderId = req.params.orderId as string;
@@ -159,7 +159,7 @@ export class OrderController {
 
             const order = await Order.findOne({ _id: orderId, tableId, sessionId });
             if (!order) return res.status(404).json({ error: 'Order not found' });
-            if (order.status !== 'completed') return res.status(409).json({ error: 'Payment opens once your order is complete' });
+            if (order.status === 'cancelled') return res.status(409).json({ error: 'Cancelled orders cannot be paid' });
             if (order.paymentStatus === 'paid') return res.status(409).json({ error: 'This order is already paid' });
 
             const isTakeaway = order.orderType === 'takeaway';
