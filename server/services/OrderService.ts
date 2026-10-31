@@ -20,8 +20,12 @@ export class OrderService {
         const customerName = typeof data.customerName === 'string' ? data.customerName.trim() : '';
         const customerPhone = typeof data.customerPhone === 'string' ? data.customerPhone.trim() : '';
         const notes = typeof data.notes === 'string' ? data.notes.trim() : '';
-        if (!customerName || /\p{N}/u.test(customerName)) throw new OrderInputError('Enter a name without numbers');
-        if (!/^\d{10}$/.test(customerPhone)) throw new OrderInputError('Enter exactly 10 digits for the phone number');
+        if (customerName.length > 120 || /[\u0000-\u001f\u007f]/.test(customerName)) {
+            throw new OrderInputError('Name must be 120 characters or fewer');
+        }
+        if (customerPhone && !/^\d{10}$/.test(customerPhone)) {
+            throw new OrderInputError('Enter a valid 10-digit phone number, or leave it blank');
+        }
         if (!/^[\p{L}\p{M}\s]*$/u.test(notes)) throw new OrderInputError('Kitchen requests can contain letters and spaces only');
         // Validate restaurantId and tableId are valid ObjectIds
         if (!data.restaurantId || !mongoose.Types.ObjectId.isValid(data.restaurantId)) {
@@ -90,7 +94,7 @@ export class OrderService {
                     paymentStatus: 'pending',
                     sessionId: data.sessionId,
                     customerName,
-                    customerPhone,
+                    ...(customerPhone ? { customerPhone } : {}),
                     notes,
                 }], { session });
 

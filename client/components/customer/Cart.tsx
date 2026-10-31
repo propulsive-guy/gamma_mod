@@ -45,18 +45,12 @@ export function Cart({ cart, onClose, onUpdateQuantity, onPlaceOrder, isPlacingO
         const newErrors = { name: '', phone: '', instructions: '' };
         let isValid = true;
 
-        if (!name.trim()) {
-            newErrors.name = 'Name is required';
-            isValid = false;
-        } else if (name.trim().length > 120) {
+        if (name.trim().length > 120) {
             newErrors.name = 'Name must be 120 characters or fewer';
             isValid = false;
         }
 
-        if (!phone.trim()) {
-            newErrors.phone = 'Phone number is required';
-            isValid = false;
-        } else if (!/^\d{10}$/.test(phone)) {
+        if (phone.trim() && !/^\d{10}$/.test(phone)) {
             newErrors.phone = 'Enter exactly 10 digits';
             isValid = false;
         }
@@ -169,10 +163,10 @@ export function Cart({ cart, onClose, onUpdateQuantity, onPlaceOrder, isPlacingO
                         <div className="space-y-4">
                             <div className="grid grid-cols-1 gap-3 min-[440px]:grid-cols-2">
                                 <div className="space-y-1">
-                                    <label htmlFor="cart-customer-name" className="ml-1 text-xs font-semibold uppercase tracking-wider" style={{ color: theme.subtext }}>Name</label>
+                                    <label htmlFor="cart-customer-name" className="ml-1 text-xs font-semibold uppercase tracking-wider" style={{ color: theme.subtext }}>Name <span className="font-normal normal-case">(optional)</span></label>
                                     <Input
                                         id="cart-customer-name"
-                                        placeholder="Enter name"
+                                        placeholder="Enter name (optional)"
                                         value={name}
                                         maxLength={120}
                                         onChange={(e) => { setName(e.target.value); setErrors((current) => ({ ...current, name: '' })); }}
@@ -185,10 +179,10 @@ export function Cart({ cart, onClose, onUpdateQuantity, onPlaceOrder, isPlacingO
                                     {errors.name && <p className="text-red-500 text-[10px] ml-1">{errors.name}</p>}
                                 </div>
                                 <div className="space-y-1">
-                                    <label htmlFor="cart-customer-phone" className="ml-1 text-xs font-semibold uppercase tracking-wider" style={{ color: theme.subtext }}>Phone</label>
+                                    <label htmlFor="cart-customer-phone" className="ml-1 text-xs font-semibold uppercase tracking-wider" style={{ color: theme.subtext }}>Mobile number <span className="font-normal normal-case">(optional)</span></label>
                                     <Input
                                         id="cart-customer-phone"
-                                        placeholder="10-digit mobile"
+                                        placeholder="10-digit mobile (optional)"
                                         value={phone}
                                         onChange={(e) => {
                                             const digits = e.target.value.replace(/\D/g, '');

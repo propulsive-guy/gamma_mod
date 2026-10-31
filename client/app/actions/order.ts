@@ -178,10 +178,10 @@ export async function createOrder(data: any) {
     const customerPhone = typeof data.customerPhone === 'string' ? data.customerPhone.replace(/\D/g, '') : '';
     const notes = typeof data.notes === 'string' ? data.notes.trim() : '';
     const sessionId = typeof data.sessionId === 'string' ? data.sessionId.trim() : '';
-    if (!customerName || customerName.length > 120 || /[\u0000-\u001f\u007f]/.test(customerName)) {
-        return { success: false, error: 'Enter your name (up to 120 characters).' };
+    if (customerName.length > 120 || /[\u0000-\u001f\u007f]/.test(customerName)) {
+        return { success: false, error: 'Name must be 120 characters or fewer.' };
     }
-    if (!/^\d{10}$/.test(customerPhone)) return { success: false, error: 'Enter a valid 10-digit phone number.' };
+    if (customerPhone && !/^\d{10}$/.test(customerPhone)) return { success: false, error: 'Enter a valid 10-digit phone number, or leave it blank.' };
     if (notes.length > 500 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(notes)) {
         return { success: false, error: 'Kitchen requests must be 500 characters or fewer.' };
     }
@@ -269,7 +269,7 @@ export async function createOrder(data: any) {
                 paymentStatus: 'pending',
                 sessionId,
                 customerName,
-                customerPhone,
+                ...(customerPhone ? { customerPhone } : {}),
                 notes,
             }], { session: activeSession });
 
