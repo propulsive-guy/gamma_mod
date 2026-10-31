@@ -85,8 +85,14 @@ export default function StoreManager({ initialSection = 'overview', initialItems
     useEffect(() => {
         setCategories((current) => [...new Set([...current, ...initialCategories])]);
     }, [initialCategories]);
-    const storeInventoryValue = storeItems.reduce((sum, item) => sum + item.currentStock * item.costPerUnit, 0);
-    const kitchenInventoryValue = kitchenStocks.reduce((sum, stock) => sum + Number(stock.currentStock || 0) * Number(storeItems.find((item) => item._id === stock.inventoryItemId)?.costPerUnit || 0), 0);
+    const itemById = useMemo(() => new Map(storeItems.map((item) => [String(item._id), item])), [storeItems]);
+    const kitchenStockByLocation = useMemo(() => new Map(
+        kitchenStocks.map((stock) => [`${stock.departmentId}:${stock.inventoryItemId}`, Number(stock.currentStock || 0)]),
+    ), [kitchenStocks]);
+    const storeInventoryValue = useMemo(() => storeItems.reduce((sum, item) => sum + item.currentStock * item.costPerUnit, 0), [storeItems]);
+    const kitchenInventoryValue = useMemo(() => kitchenStocks.reduce((sum, stock) => (
+        sum + Number(stock.currentStock || 0) * Number(itemById.get(String(stock.inventoryItemId))?.costPerUnit || 0)
+    ), 0), [kitchenStocks, itemById]);
     const startingInventoryValue = storeInventoryValue + kitchenInventoryValue;
     const [tab, setTab] = useState<'buying' | 'expenses' | 'balances' | 'stock'>(initialSection === 'expenses' ? 'expenses' : initialSection === 'balances' ? 'balances' : initialSection === 'stock' || initialSection === 'overview' ? 'stock' : 'buying');
     const [buyingView, setBuyingView] = useState<'kitchen' | 'vendors'>(initialSection === 'purchasing' ? 'vendors' : 'kitchen');
@@ -116,21 +122,27 @@ export default function StoreManager({ initialSection = 'overview', initialItems
         .filter((item) => `${item.name} ${item.category} ${item.supplier || ''}`.toLowerCase().includes(stockQuery.trim().toLowerCase()))
         .sort((a, b) => Number(b.reorderLevel > 0 && b.currentStock <= b.reorderLevel) - Number(a.reorderLevel > 0 && a.currentStock <= a.reorderLevel) || a.name.localeCompare(b.name)),
     [storeItems, stockQuery]);
-    const requisitions = initialDocuments.filter((doc) => doc.type === 'requisition');
-    const purchaseOrders = initialDocuments.filter((doc) => doc.type === 'purchase_order');
-    const supplierBills = purchaseOrders.filter((doc) => doc.status === 'received' && (
+    const requisitions = useMemo(() => initialDocuments.filter((doc) => doc.type === 'requisition'), [initialDocuments]);
+    const purchaseOrders = useMemo(() => initialDocuments.filter((doc) => doc.type === 'purchase_order'), [initialDocuments]);
+    const supplierBills = useMemo(() => purchaseOrders.filter((doc) => doc.status === 'received' && (
         doc.entrySource === 'supplier_bill' || doc.reference.startsWith('BILL-') || String(doc.notes || '').toLowerCase().includes('supplier bill entry')
-    ));
-    const vendorOrders = purchaseOrders.filter((doc) => !supplierBills.some((bill) => bill._id === doc._id));
-    const knownSuppliers = [...new Set([...purchaseOrders.map((doc) => doc.supplier.trim()), ...storeItems.map((item) => item.supplier?.trim() || '')].filter(Boolean))].sort((a, b) => a.localeCompare(b));
-    const pendingLegacyRequests = requisitions.filter((doc) => doc.status === 'submitted').length;
-    const openOrders = purchaseOrders.filter((doc) => ['ordered', 'partially_received'].includes(doc.status)).length;
-    const reviewOrders = purchaseOrders.filter((doc) => doc.status === 'review_required');
-    const suggestedSpend = reviewOrders.reduce((sum, po) => sum + po.lines.reduce((lineSum, line) => lineSum + line.orderedQuantity * line.unitCost, 0), 0);
-    const hasUnpricedSuggestions = reviewOrders.some((po) => po.lines.some((line) => line.unitCost <= 0));
+    )), [purchaseOrders]);
+    const vendorOrders = useMemo(() => {
+        const billIds = new Set(supplierBills.map((bill) => bill._id));
+        return purchaseOrders.filter((doc) => !billIds.has(doc._id));
+    }, [purchaseOrders, supplierBills]);
+    const knownSuppliers = useMemo(() => [...new Set([
+        ...purchaseOrders.map((doc) => doc.supplier.trim()),
+        ...storeItems.map((item) => item.supplier?.trim() || ''),
+    ].filter(Boolean))].sort((a, b) => a.localeCompare(b)), [purchaseOrders, storeItems]);
+    const pendingLegacyRequests = useMemo(() => requisitions.filter((doc) => doc.status === 'submitted').length, [requisitions]);
+    const openOrders = useMemo(() => purchaseOrders.filter((doc) => ['ordered', 'partially_received'].includes(doc.status)).length, [purchaseOrders]);
+    const reviewOrders = useMemo(() => purchaseOrders.filter((doc) => doc.status === 'review_required'), [purchaseOrders]);
+    const suggestedSpend = useMemo(() => reviewOrders.reduce((sum, po) => sum + po.lines.reduce((lineSum, line) => lineSum + line.orderedQuantity * line.unitCost, 0), 0), [reviewOrders]);
+    const hasUnpricedSuggestions = useMemo(() => reviewOrders.some((po) => po.lines.some((line) => line.unitCost <= 0)), [reviewOrders]);
 
     function kitchenOnHand(departmentId: string, inventoryItemId: string) {
-        return Number(kitchenStocks.find((stock) => String(stock.departmentId) === String(departmentId) && String(stock.inventoryItemId) === String(inventoryItemId))?.currentStock || 0);
+        return kitchenStockByLocation.get(`${departmentId}:${inventoryItemId}`) || 0;
     }
 
     function openAutoOrderReview(po: StoreDocument) {
@@ -265,7 +277,7 @@ export default function StoreManager({ initialSection = 'overview', initialItems
             </nav>
             {buyingView === 'vendors' && reviewOrders.length > 0 && <section className="rounded-2xl border border-amber-200 bg-white">
                 <div className="border-b border-amber-100 bg-amber-50 p-4 sm:p-5"><h2 className="font-bold text-amber-950">Low-stock suggestions to review ({reviewOrders.length})</h2><p className="mt-1 text-xs text-amber-800">Check the quantity, supplier and price. Approval saves an order record; send it to the supplier separately.</p></div>
-                <div className="divide-y divide-slate-100">{reviewOrders.map((po) => <article key={po._id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-bold text-slate-900">{po.lines.map((line) => line.itemName).join(', ')}</h3><span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold uppercase text-amber-800">Review required</span></div><div className="mt-2 space-y-1">{po.lines.map((line) => { const item = storeItems.find((candidate) => candidate._id === line.inventoryItemId); return <p key={line.inventoryItemId} className="text-sm text-slate-600">Suggested {quantity(line.orderedQuantity)} {line.unit} · {line.unitCost > 0 ? `estimated ${money(line.orderedQuantity * line.unitCost)}` : 'price needed'}{item ? ` · Store has ${quantity(item.currentStock)} / minimum ${quantity(item.reorderLevel)} ${item.unit}` : ''}</p>; })}</div><p className="mt-1 text-xs text-slate-500">Supplier: {po.supplier || 'Choose during review'}{po.notes ? ` · ${po.notes}` : ''}</p></div><button onClick={() => openAutoOrderReview(po)} className="min-h-10 shrink-0 rounded-xl bg-amber-600 px-4 text-sm font-bold text-white hover:bg-amber-700">Review suggestion</button></article>)}</div>
+                <div className="divide-y divide-slate-100">{reviewOrders.map((po) => <article key={po._id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-bold text-slate-900">{po.lines.map((line) => line.itemName).join(', ')}</h3><span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold uppercase text-amber-800">Review required</span></div><div className="mt-2 space-y-1">{po.lines.map((line) => { const item = itemById.get(String(line.inventoryItemId)); return <p key={line.inventoryItemId} className="text-sm text-slate-600">Suggested {quantity(line.orderedQuantity)} {line.unit} · {line.unitCost > 0 ? `estimated ${money(line.orderedQuantity * line.unitCost)}` : 'price needed'}{item ? ` · Store has ${quantity(item.currentStock)} / minimum ${quantity(item.reorderLevel)} ${item.unit}` : ''}</p>; })}</div><p className="mt-1 text-xs text-slate-500">Supplier: {po.supplier || 'Choose during review'}{po.notes ? ` · ${po.notes}` : ''}</p></div><button onClick={() => openAutoOrderReview(po)} className="min-h-10 shrink-0 rounded-xl bg-amber-600 px-4 text-sm font-bold text-white hover:bg-amber-700">Review suggestion</button></article>)}</div>
             </section>}
             {buyingView === 'vendors' && <InventoryBillScanner items={storeItems.map(({ _id, name, category, unit, currentStock, costPerUnit }) => ({ _id, name, category, unit, currentStock, costPerUnit }))} suppliers={knownSuppliers} categories={categories} />}
             {buyingView === 'vendors' && <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5"><div><h2 className="font-bold text-slate-900">Planning a future order?</h2><p className="mt-1 text-xs leading-5 text-slate-500">Save an order you agreed with a supplier. It does not add stock; record the actual supplier bill above when goods arrive.</p></div><button disabled={!storeItems.length} onClick={() => { setEditOrderFor(null); setShowVendorOrder(true); }} className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"><TruckIcon className="h-4 w-4" /> Create order</button></div>}

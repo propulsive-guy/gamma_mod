@@ -15,29 +15,30 @@ export default async function OrdersPage() {
 
     await dbConnect();
 
-    const [recentOrders, unpaidOrders, takeawayOrders, restaurant] = await Promise.all([
+    const orderFields = 'items.name items.price items.quantity total status paymentStatus paymentMethod orderType source checkout review restaurantId tableId customerName customerPhone notes createdAt';
+    const [recentOrders, outstandingOrders, restaurant] = await Promise.all([
         Order.find({
             restaurantId: session.user.restaurantId,
         })
-            .populate('tableId', '-qrCodeDataUrl')
+            .select(orderFields)
+            .populate('tableId', 'tableNumber')
             .sort({ createdAt: -1 })
             .limit(100)
             .lean(),
         Order.find({
             restaurantId: session.user.restaurantId,
-            status: 'completed',
-            paymentStatus: { $ne: 'paid' },
+            $or: [
+                { status: { $ne: 'cancelled' }, paymentStatus: { $ne: 'paid' } },
+                { orderType: 'takeaway' },
+            ],
         })
-            .populate('tableId', '-qrCodeDataUrl')
-            .sort({ createdAt: -1 })
-            .lean(),
-        Order.find({ restaurantId: session.user.restaurantId, orderType: 'takeaway' })
-            .populate('tableId', '-qrCodeDataUrl')
+            .select(orderFields)
+            .populate('tableId', 'tableNumber')
             .sort({ createdAt: -1 })
             .lean(),
         Restaurant.findById(session.user.restaurantId).select('name gstNumber fssaiNumber gstPercentage sgstPercentage packagingCharge address phone').lean()
     ]);
-    const ordersById = new Map([...recentOrders, ...unpaidOrders, ...takeawayOrders].map(order => [String(order._id), order]));
+    const ordersById = new Map([...recentOrders, ...outstandingOrders].map(order => [String(order._id), order]));
     const orders = [...ordersById.values()].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
     return (

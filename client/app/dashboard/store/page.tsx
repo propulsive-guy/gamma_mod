@@ -23,25 +23,29 @@ export default async function StorePage({ searchParams }: { searchParams: Promis
     if (!session?.user?.restaurantId) redirect('/auth/signin');
     await dbConnect();
     const restaurantId = session.user.restaurantId;
-    await processKitchenStockExpiry(restaurantId);
-    try {
-        await ensureLowStockPurchaseDrafts(restaurantId);
-    } catch (error) {
-        console.error('Could not prepare low-stock review orders:', error);
-    }
-
-    const query = await searchParams;
+    const setupPromise = Promise.all([
+        processKitchenStockExpiry(restaurantId),
+        ensureLowStockPurchaseDrafts(restaurantId).catch((error) => {
+            console.error('Could not prepare low-stock review orders:', error);
+        }),
+    ]);
+    const [query] = await Promise.all([searchParams, setupPromise]);
     const initialSection = sections.includes(query.section as typeof sections[number]) ? query.section as typeof sections[number] : 'overview';
     const [items, categories, documents, entries, settings, departments, kitchenStocks] = await Promise.all([
         InventoryItem.find({ restaurantId, isActive: true })
-            .select('name sku category unit currentStock reorderLevel costPerUnit supplier notes isActive')
+            .select('name sku category unit currentStock reorderLevel costPerUnit supplier')
             .sort({ category: 1, name: 1 }).lean(),
         InventoryCategory.find({ restaurantId }).select('name').sort({ name: 1 }).lean(),
-        ProcurementDocument.find({ restaurantId }).sort({ createdAt: -1 }).limit(120).lean(),
-        FinancialEntry.find({ restaurantId }).sort({ entryDate: -1 }).limit(30).lean(),
-        FinancialSettings.findOne({ restaurantId }).lean(),
-        KitchenDepartment.find({ restaurantId, isActive: true }).sort({ name: 1 }).lean(),
-        KitchenStock.find({ restaurantId }).lean(),
+        ProcurementDocument.find({ restaurantId })
+            .select('type status reference supplier vendorBillNumber invoiceDate documentDate entrySource departmentId notes lines payments createdAt')
+            .sort({ createdAt: -1 }).limit(120).lean(),
+        FinancialEntry.find({ restaurantId })
+            .select('type category amount entryDate reference note createdAt')
+            .sort({ entryDate: -1 }).limit(30).lean(),
+        FinancialSettings.findOne({ restaurantId })
+            .select('openingDate openingCash openingInventoryValue otherAssets openingPayables openingLoans otherLiabilities').lean(),
+        KitchenDepartment.find({ restaurantId, isActive: true }).select('name').sort({ name: 1 }).lean(),
+        KitchenStock.find({ restaurantId }).select('departmentId inventoryItemId currentStock').lean(),
     ]);
 
     const categoryNames = [...new Map(

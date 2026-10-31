@@ -119,10 +119,11 @@ export function OrdersList({ initialOrders, restaurant }: { initialOrders: Order
         };
     }, [socket]);
 
-    // Polling fallback: refresh orders every 10 seconds via server action
-    // This ensures live updates even when Socket.IO can't connect (HTTPS→HTTP mixed content)
+    // Poll only when Socket.IO is unavailable. The interval also checks page
+    // visibility so a background tab does not keep querying the database.
     useEffect(() => {
-        const interval = setInterval(async () => {
+        const pollOrders = async (force = false) => {
+            if ((!force && socket?.connected) || document.visibilityState !== 'visible') return;
             try {
                 const result = await getOrders();
                 if (result.success && result.data) {
@@ -131,10 +132,21 @@ export function OrdersList({ initialOrders, restaurant }: { initialOrders: Order
             } catch (err) {
                 console.error('[OrdersList] Polling error:', err);
             }
-        }, 10000);
+        };
+        const refreshAfterReconnect = () => { void pollOrders(true); };
+        socket?.on('connect', refreshAfterReconnect);
+        const interval = setInterval(() => { void pollOrders(); }, 10000);
+        const refreshWhenVisible = () => {
+            if (document.visibilityState === 'visible') void pollOrders();
+        };
+        document.addEventListener('visibilitychange', refreshWhenVisible);
 
-        return () => clearInterval(interval);
-    }, []);
+        return () => {
+            clearInterval(interval);
+            document.removeEventListener('visibilitychange', refreshWhenVisible);
+            socket?.off('connect', refreshAfterReconnect);
+        };
+    }, [socket]);
 
     const handleStatusUpdate = async (orderId: string, newStatus: Order['status']) => {
         setOrders(prevOrders => prevOrders.map(order =>

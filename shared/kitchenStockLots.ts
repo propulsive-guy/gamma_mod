@@ -56,10 +56,22 @@ export async function consumeKitchenLots(Lot: any, filter: {
 }
 
 export async function seedLegacyKitchenLots(models: { Lot: any; KitchenStock: any; InventoryItem: any }, restaurantId: any, session?: mongoose.ClientSession) {
-    const balances = await models.KitchenStock.find({ restaurantId, currentStock: { $gt: 0 } }).session(session || null).lean();
+    const balances = await models.KitchenStock.find({ restaurantId, currentStock: { $gt: 0 } })
+        .select('restaurantId departmentId inventoryItemId currentStock')
+        .session(session || null).lean();
+    if (!balances.length) return;
+
+    // This is a one-time backfill for balances created before stock lots existed.
+    // Check all deterministic baseline keys in one query instead of making one
+    // existence request per kitchen balance on every expiry pass.
+    const baselineKeys = balances.map((balance: any) => `${restaurantId}:${balance.departmentId}:${balance.inventoryItemId}`);
+    const existingBaselines = await models.Lot.find({ restaurantId, baselineKey: { $in: baselineKeys } })
+        .select('baselineKey').session(session || null).lean();
+    const existingBaselineKeys = new Set(existingBaselines.map((lot: any) => String(lot.baselineKey)));
+
     for (const balance of balances) {
         const baselineKey = `${restaurantId}:${balance.departmentId}:${balance.inventoryItemId}`;
-        if (await models.Lot.exists({ baselineKey }).session(session || null)) continue;
+        if (existingBaselineKeys.has(baselineKey)) continue;
         const tracked = await models.Lot.aggregate([
             { $match: { restaurantId: balance.restaurantId, departmentId: balance.departmentId, inventoryItemId: balance.inventoryItemId, remainingQuantity: { $gt: 0 } } },
             { $group: { _id: null, quantity: { $sum: '$remainingQuantity' } } },

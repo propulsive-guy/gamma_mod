@@ -74,6 +74,7 @@ const procurementDocumentSchema = new Schema<IProcurementDocument>({
 }, { timestamps: true });
 
 procurementDocumentSchema.index({ restaurantId: 1, type: 1, createdAt: -1 });
+procurementDocumentSchema.index({ restaurantId: 1, createdAt: -1 });
 procurementDocumentSchema.index({ restaurantId: 1, reference: 1 }, { unique: true });
 procurementDocumentSchema.index({ restaurantId: 1, autoReorderKey: 1 }, { unique: true, partialFilterExpression: { autoReorderKey: { $type: 'string' } } });
 procurementDocumentSchema.index({ restaurantId: 1, vendorBillKey: 1 }, { unique: true, partialFilterExpression: { vendorBillKey: { $type: 'string' } } });

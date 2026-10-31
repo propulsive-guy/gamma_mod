@@ -13,8 +13,7 @@ export async function ensureLowStockPurchaseDrafts(restaurantId: string | mongoo
     if (!lowItems.length) return 0;
 
     const itemIds = lowItems.map((item) => item._id);
-    const [existingDrafts, allDrafts, openOrders] = await Promise.all([
-        ProcurementDocument.find({ restaurantId, type: 'purchase_order', status: 'review_required', autoReorderKey: { $in: itemIds.map(String) } }).select('autoReorderKey lines notes').lean(),
+    const [allDrafts, openOrders] = await Promise.all([
         ProcurementDocument.find({ restaurantId, type: 'purchase_order', status: 'review_required', autoReorderKey: { $exists: true } }).select('autoReorderKey lines notes').lean(),
         ProcurementDocument.find({ restaurantId, type: 'purchase_order', status: { $in: ['ordered', 'partially_received'] }, 'lines.inventoryItemId': { $in: itemIds } }).select('lines.inventoryItemId').lean(),
     ]);
@@ -37,7 +36,7 @@ export async function ensureLowStockPurchaseDrafts(restaurantId: string | mongoo
             });
         }
     }
-    const existingKeys = new Set(existingDrafts.map((doc) => doc.autoReorderKey));
+    const existingKeys = new Set(allDrafts.map((doc) => doc.autoReorderKey));
     let created = 0;
 
     for (const item of lowItems) {

@@ -66,7 +66,7 @@ export async function getManagementReport(periodInput: ManagementPeriod, anchorD
         const openingDate = settings?.openingDate || new Date();
 
         const settledOrderMatch = { restaurantId, status: { $in: ['served', 'completed'] } };
-        const [periodSales, openingSales, currentReceivables, openingStock, periodEntries, openingEntries, inventory, kitchenStocks, purchaseOrders, settledOrders, menuCatalog, inventoryCatalog, inventoryCategories, periodMovements] = await Promise.all([
+        const [periodSales, openingSales, currentReceivables, openingStock, periodEntries, openingEntries, inventory, kitchenStocks, procurementSummary, settledOrders, menuCatalog, inventoryCatalog, inventoryCategories, periodMovements] = await Promise.all([
             Order.aggregate([
                 { $match: { ...settledOrderMatch, createdAt: { $gte: range.start, $lt: range.end } } },
                 { $group: { _id: null, sales: { $sum: { $ifNull: ['$checkout.payableAmount', '$total'] } }, orders: { $sum: 1 } } },
@@ -104,8 +104,22 @@ export async function getManagementReport(periodInput: ManagementPeriod, anchorD
                 { $group: { _id: null, value: { $sum: { $multiply: ['$currentStock', '$costPerUnit'] } } } },
             ]),
             KitchenStock.find({ restaurantId }).populate('inventoryItemId', 'costPerUnit').lean(),
-            ProcurementDocument.find({ restaurantId, type: 'purchase_order', status: { $in: ['partially_received', 'received'] }, createdAt: { $gte: openingDate } })
-                .select('lines payments').lean(),
+            ProcurementDocument.aggregate([
+                { $match: { restaurantId, type: 'purchase_order', status: { $in: ['partially_received', 'received'] }, createdAt: { $gte: openingDate } } },
+                { $project: {
+                    receivedValue: { $sum: { $map: { input: { $ifNull: ['$lines', []] }, as: 'line', in: { $multiply: [{ $ifNull: ['$$line.receivedQuantity', 0] }, { $ifNull: ['$$line.unitCost', 0] }] } } } },
+                    paidValue: { $sum: { $map: { input: { $ifNull: ['$payments', []] }, as: 'payment', in: { $ifNull: ['$$payment.amount', 0] } } } },
+                    paymentsSinceOpening: { $sum: { $map: {
+                        input: { $filter: { input: { $ifNull: ['$payments', []] }, as: 'payment', cond: { $gte: ['$$payment.paidAt', openingDate] } } },
+                        as: 'payment', in: { $ifNull: ['$$payment.amount', 0] },
+                    } } },
+                } },
+                { $group: {
+                    _id: null,
+                    supplierDue: { $sum: { $max: [0, { $subtract: ['$receivedValue', '$paidValue'] }] } },
+                    procurementPayments: { $sum: '$paymentsSinceOpening' },
+                } },
+            ]),
             Order.find({ restaurantId, status: { $in: ['served' as const, 'completed' as const] }, createdAt: { $gte: range.start, $lt: range.end } }).select('items total checkout').select('+inventoryUsage +items.recipeSnapshot').lean(),
             MenuItem.find({ restaurantId }).select('name recipe').lean(),
             InventoryItem.find({ restaurantId }).select('name category unit costPerUnit expiryDays wasteBehavior').lean(),
@@ -322,12 +336,9 @@ export async function getManagementReport(periodInput: ManagementPeriod, anchorD
         const accumulated = openingStock[0] || zero;
         const expensesSinceOpening = entryAmount(openingEntryRows, 'expense');
         const accumulatedProfit = allSales + externalSalesSinceOpening - Number(accumulated.cogs || 0) - Number(accumulated.wastage || 0) - expensesSinceOpening;
-        const procurementPayments = purchaseOrders.flatMap((po: any) => po.payments || []).filter((payment: any) => new Date(payment.paidAt) >= openingDate).reduce((sum: number, payment: any) => sum + Number(payment.amount || 0), 0);
-        const supplierDue = purchaseOrders.reduce((sum: number, po: any) => {
-            const receivedValue = (po.lines || []).reduce((lineSum: number, line: any) => lineSum + Number(line.receivedQuantity || 0) * Number(line.unitCost || 0), 0);
-            const paidValue = (po.payments || []).reduce((lineSum: number, payment: any) => lineSum + Number(payment.amount || 0), 0);
-            return sum + Math.max(0, receivedValue - paidValue);
-        }, 0);
+        const procurementTotals = procurementSummary[0] || {};
+        const procurementPayments = Number(procurementTotals.procurementPayments || 0);
+        const supplierDue = Number(procurementTotals.supplierDue || 0);
         const nonOrderPurchases = Number(accumulated.purchases || 0);
         const cash = Number(settings?.openingCash || 0) + cashSales + externalSalesSinceOpening + contributions + loansReceived - nonOrderPurchases - procurementPayments - expensesSinceOpening - ownerDraws - loanRepayments;
         const receivables = Number(currentReceivables[0]?.amount || 0);

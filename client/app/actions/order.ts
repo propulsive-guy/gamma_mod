@@ -391,13 +391,18 @@ export async function getOrders() {
         const restaurantId = await currentRestaurantId();
         if (!restaurantId) return { success: false, error: 'Your session has expired. Sign in again.' };
         await dbConnect();
-        const [recent, unpaid, takeaway] = await Promise.all([
-            Order.find({ restaurantId }).sort({ createdAt: -1 }).limit(100).populate('tableId', 'tableNumber').lean(),
-            Order.find({ restaurantId, status: { $ne: 'cancelled' }, paymentStatus: { $ne: 'paid' } })
-                .sort({ createdAt: -1 }).populate('tableId', 'tableNumber').lean(),
-            Order.find({ restaurantId, orderType: 'takeaway' }).sort({ createdAt: -1 }).populate('tableId', 'tableNumber').lean(),
+        const orderFields = 'items.name items.price items.quantity total status paymentStatus paymentMethod orderType source checkout review restaurantId tableId customerName customerPhone notes createdAt';
+        const [recent, outstanding] = await Promise.all([
+            Order.find({ restaurantId }).select(orderFields).sort({ createdAt: -1 }).limit(100).populate('tableId', 'tableNumber').lean(),
+            Order.find({
+                restaurantId,
+                $or: [
+                    { status: { $ne: 'cancelled' }, paymentStatus: { $ne: 'paid' } },
+                    { orderType: 'takeaway' },
+                ],
+            }).select(orderFields).sort({ createdAt: -1 }).populate('tableId', 'tableNumber').lean(),
         ]);
-        const byId = new Map([...recent, ...unpaid, ...takeaway].map((order) => [String(order._id), order]));
+        const byId = new Map([...recent, ...outstanding].map((order) => [String(order._id), order]));
         const orders = [...byId.values()].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
         return { success: true, data: JSON.parse(JSON.stringify(orders)) };
     } catch (error) {
