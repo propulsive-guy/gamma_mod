@@ -710,9 +710,13 @@ function UPIPaymentSection({ restaurant, amount, orderId, accent }: { restaurant
         upiParams.set('mc', merchantCode);
     }
     if (returnUrl) upiParams.set('url', returnUrl);
-    const upiUrl = payee ? `upi://pay?${upiParams.toString()}` : '';
-    const googlePayUrl = payee ? `gpay://upi/pay?${upiParams.toString()}` : '';
-    const appLaunchUrl = isIOS ? googlePayUrl : upiUrl;
+    const paymentQuery = upiParams.toString();
+    const upiUrl = payee ? `upi://pay?${paymentQuery}` : '';
+    const appLaunchLinks = payee ? [
+        { label: 'Google Pay', href: `${isIOS ? 'gpay://upi/pay' : 'tez://upi/pay'}?${paymentQuery}` },
+        { label: 'PhonePe', href: `phonepe://pay?${paymentQuery}` },
+        { label: 'Paytm', href: `paytmmp://upi/pay?${paymentQuery}` },
+    ] : [];
 
     useEffect(() => {
         const userAgent = navigator.userAgent;
@@ -753,8 +757,14 @@ function UPIPaymentSection({ restaurant, amount, orderId, accent }: { restaurant
             <p className="mt-4 text-2xl font-bold">{formatCurrency(amount)}</p>
             <p className="mt-1 text-xs text-zinc-500">Paying {payeeName} · {payee}</p>
             <p className="mt-2 text-xs font-semibold text-emerald-700">The QR includes this exact bill amount.</p>
-            <a href={appLaunchUrl} onClick={() => setLaunchHint(isIOS ? 'Opening Google Pay. If it is not installed, scan the QR code with another UPI app.' : 'Opening your available UPI apps. If no app opens, scan this QR code.')} className="mt-5 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl px-5 py-3.5 text-sm font-bold" style={{ backgroundColor: accent, color: contrastTextColor(accent) }}>{isIOS ? 'Open Google Pay' : 'Pay with any UPI app'} <ArrowRightIcon className="h-4 w-4" /></a>
-            {isIOS && <a href={upiUrl} onClick={() => setLaunchHint('Trying the standard UPI link. If no app opens, scan this QR code.')} className="mt-2 inline-flex min-h-11 items-center justify-center rounded-xl px-4 text-xs font-semibold text-zinc-600 underline underline-offset-4">Try another UPI app</a>}
+            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                {appLaunchLinks.map(({ label, href }, index) => (
+                    <a key={label} href={href} onClick={() => setLaunchHint(`Opening ${label}. If it does not open, use another app button or scan the QR.`)} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold" style={index === 0 ? { backgroundColor: accent, borderColor: accent, color: contrastTextColor(accent) } : { borderColor: '#e4e4e7', color: '#27272a' }}>
+                        {label} {index === 0 && <ArrowRightIcon className="h-4 w-4" />}
+                    </a>
+                ))}
+            </div>
+            {!isIOS && <a href={upiUrl} onClick={() => setLaunchHint('Opening the UPI app chooser. If it does not open, choose a specific app above or scan the QR.')} className="mt-2 inline-flex min-h-11 items-center justify-center rounded-xl px-4 text-xs font-semibold text-zinc-600 underline underline-offset-4">Other UPI apps</a>}
             {launchHint && <p role="status" className="mt-1 text-xs text-zinc-500">{launchHint}</p>}
             <p className="mt-3 text-xs text-zinc-400">Your restaurant will confirm the payment after you complete it in your UPI app.</p>
         </div>
