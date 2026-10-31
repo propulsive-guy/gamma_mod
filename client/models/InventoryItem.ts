@@ -14,7 +14,9 @@ export interface IInventoryItem extends Document {
     costPerUnit: number;
     supplier?: string;
     notes?: string;
-    wasteBehavior: 'carry_forward' | 'perishable';
+    expiryDays?: number;
+    /** @deprecated Kept to read old inventory records during migration to expiryDays. */
+    wasteBehavior?: 'carry_forward' | 'perishable';
     isActive: boolean;
 }
 
@@ -29,7 +31,8 @@ const inventoryItemSchema = new Schema<IInventoryItem>({
     costPerUnit: { type: Number, required: true, min: 0, default: 0 },
     supplier: { type: String, trim: true, maxlength: 120, default: '' },
     notes: { type: String, trim: true, maxlength: 500, default: '' },
-    wasteBehavior: { type: String, enum: ['carry_forward', 'perishable'], default: 'carry_forward' },
+    expiryDays: { type: Number, min: 1, max: 3650 },
+    wasteBehavior: { type: String, enum: ['carry_forward', 'perishable'], select: true },
     isActive: { type: Boolean, default: true },
 }, { timestamps: true });
 

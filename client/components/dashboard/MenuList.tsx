@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import { createMenuItem, deleteMenuItem, toggleMenuItemAvailability, updateMenuItem } from '@/app/actions/menu';
@@ -35,6 +36,7 @@ const displayRecipeQuantity = (quantity: number, stockUnit: string) => {
 };
 
 export function MenuList({ initialMenuItems, inventoryItems, departments, inventoryTrackingEnabled = true }: { initialMenuItems: MenuItem[]; inventoryItems: InventoryOption[]; departments: DepartmentOption[]; inventoryTrackingEnabled?: boolean }) {
+    const router = useRouter();
     const [showAddForm, setShowAddForm] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -159,6 +161,7 @@ export function MenuList({ initialMenuItems, inventoryItems, departments, invent
                 setAestheticImagePreview(null);
                 setEditingId(null);
                 setShowAddForm(false);
+                router.refresh();
             } else {
                 toast.error(result.error || (editingId ? 'Failed to update menu item' : 'Failed to add menu item'));
             }
@@ -196,6 +199,7 @@ export function MenuList({ initialMenuItems, inventoryItems, departments, invent
         const result = await toggleMenuItemAvailability(id);
         if (result.success) {
             toast.success('Availability updated');
+            router.refresh();
         } else {
             toast.error('Failed to update availability');
         }
@@ -207,6 +211,7 @@ export function MenuList({ initialMenuItems, inventoryItems, departments, invent
         const result = await deleteMenuItem(id);
         if (result.success) {
             toast.success('Item deleted successfully');
+            router.refresh();
         } else {
             toast.error('Failed to delete item');
         }
@@ -252,7 +257,12 @@ export function MenuList({ initialMenuItems, inventoryItems, departments, invent
     return (
         <div className="space-y-8">
             <MenuPhotoImporter />
-            {inventoryTrackingEnabled && <section className="flex flex-col gap-4 rounded-2xl border border-sky-200 bg-sky-50 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+            {!inventoryTrackingEnabled ? (
+                <section className="rounded-2xl border border-sky-200 bg-sky-50 p-4 sm:p-5">
+                    <h2 className="font-bold text-slate-900">Order management mode</h2>
+                    <p className="mt-1 text-sm text-slate-600">Menu items and prices are ready for ordering. Stock is not tracked for this account.</p>
+                </section>
+            ) : <section className="flex flex-col gap-4 rounded-2xl border border-sky-200 bg-sky-50 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
                 <div>
                     <h2 className="font-bold text-slate-900">Automatic inventory deduction</h2>
                     <p className="mt-1 max-w-3xl text-sm text-slate-600">Assign each dish to the department that prepares it and add its ingredients per serving. Stock is reserved from that department when an order is placed and returned if the order is cancelled.</p>
@@ -261,7 +271,7 @@ export function MenuList({ initialMenuItems, inventoryItems, departments, invent
                 {unlinkedMenuItems.length > 0 && !showAddForm && (
                     <button type="button" onClick={() => handleEdit(unlinkedMenuItems[0])} className="min-h-11 shrink-0 rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-700">Set up next dish: {unlinkedMenuItems[0].name}</button>
                 )}
-                {!inventoryItems.length && <Link href="/dashboard/inventory" className="min-h-11 shrink-0 rounded-xl border border-sky-300 bg-white px-4 py-2.5 text-center text-sm font-bold text-sky-700 hover:bg-sky-100">Add stock items first</Link>}
+                {!inventoryItems.length && <Link href="#ingredient-catalog" className="min-h-11 shrink-0 rounded-xl border border-sky-300 bg-white px-4 py-2.5 text-center text-sm font-bold text-sky-700 hover:bg-sky-100">Add ingredients above</Link>}
             </section>}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm animate-in fade-in duration-300">
                 <div className="flex flex-wrap gap-2 max-w-full overflow-x-auto no-scrollbar py-1">
@@ -397,7 +407,7 @@ export function MenuList({ initialMenuItems, inventoryItems, departments, invent
                         </div>
 
                             {inventoryTrackingEnabled && <div className="rounded-xl border border-sky-100 bg-sky-50/40 p-4">
-                            <label className="mb-3 block text-sm font-semibold text-gray-900">Preparing department<select required={recipe.length > 0} value={formData.departmentId} onChange={(event) => setFormData({ ...formData, departmentId: event.target.value })} className="mt-1.5 h-11 w-full rounded-xl border border-sky-100 bg-white px-3 text-sm text-gray-900"><option value="">Select department</option>{departments.map((department) => <option key={department._id} value={department._id}>{department.name}</option>)}</select>{!departments.length && <Link href="/dashboard/inventory" className="mt-1 inline-block text-xs font-normal text-amber-700 underline">Open Kitchen Inventory to create departments.</Link>}</label>
+                            <label className="mb-3 block text-sm font-semibold text-gray-900">Preparing department<select required={recipe.length > 0} value={formData.departmentId} onChange={(event) => setFormData({ ...formData, departmentId: event.target.value })} className="mt-1.5 h-11 w-full rounded-xl border border-sky-100 bg-white px-3 text-sm text-gray-900"><option value="">Select department</option>{departments.map((department) => <option key={department._id} value={department._id}>{department.name}</option>)}</select>{!departments.length && <Link href="/dashboard/store?section=requisitions" className="mt-1 inline-block text-xs font-normal text-amber-700 underline">Open Store to create kitchen departments.</Link>}</label>
                             <h3 className="text-sm font-semibold text-gray-900">Ingredients for one serving</h3>
                             <p className="mt-1 text-xs text-gray-500">Add each stock item and how much goes into one dish. Example: Paneer Butter Masala → Paneer → 100 g.</p>
                             <div className="mt-3 space-y-2">
@@ -421,8 +431,8 @@ export function MenuList({ initialMenuItems, inventoryItems, departments, invent
                                 })}
                             </div>
                             <button type="button" disabled={recipe.length >= inventoryItems.length} onClick={() => setRecipe([...recipe, { inventoryItemId: '', quantity: 0 }])} className="mt-3 text-sm font-semibold text-sky-700 disabled:opacity-50">+ Add inventory item</button>
-                            {!inventoryItems.length && <p className="mt-2 text-xs text-gray-500">Add stock items in Inventory first.</p>}
-                        </div>}
+                            {!inventoryItems.length && <p className="mt-2 text-xs text-gray-500">Add ingredients in the section above first.</p>}
+                            </div>}
 
                         <div className="space-y-2">
                             <label className="text-sm font-medium text-gray-700">

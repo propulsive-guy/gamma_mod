@@ -11,7 +11,7 @@ export async function processKitchenStockExpiry(restaurantId: mongoose.Types.Obj
     try {
         await session.withTransaction(async () => {
             await seedLegacyKitchenLots({ Lot: KitchenStockLot, KitchenStock, InventoryItem }, restaurantId, session);
-            result = await expireDueKitchenLots({ Lot: KitchenStockLot, KitchenStock, StockMovement }, restaurantId, session);
+            result = await expireDueKitchenLots({ Lot: KitchenStockLot, KitchenStock, StockMovement, InventoryItem }, restaurantId, session);
         });
     } finally {
         await session.endSession();

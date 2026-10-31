@@ -7,7 +7,7 @@ import KitchenStockLot from '@/models/KitchenStockLot';
 import Table from '@/models/Table';
 import Restaurant from '@/models/Restaurant';
 import mongoose from 'mongoose';
-import { consumeKitchenLots, createKitchenLot, expireDueKitchenLots, seedLegacyKitchenLots } from '../../shared/kitchenStockLots';
+import { consumeKitchenLots, createKitchenLot, effectiveExpiryDays, expireDueKitchenLots, seedLegacyKitchenLots } from '../../shared/kitchenStockLots';
 
 export class OrderInputError extends Error {}
 
@@ -48,7 +48,7 @@ export class OrderService {
                 const inventoryTrackingEnabled = restaurant.inventoryTrackingEnabled !== false;
                 if (inventoryTrackingEnabled) {
                     await seedLegacyKitchenLots({ Lot: KitchenStockLot, KitchenStock, InventoryItem }, data.restaurantId, session);
-                    await expireDueKitchenLots({ Lot: KitchenStockLot, KitchenStock, StockMovement }, data.restaurantId, session);
+                    await expireDueKitchenLots({ Lot: KitchenStockLot, KitchenStock, StockMovement, InventoryItem }, data.restaurantId, session);
                 }
                 const table = await Table.findOne({ _id: data.tableId, restaurantId: data.restaurantId, isActive: true }).session(session);
                 if (!table) throw new Error('This ordering QR is unavailable');
@@ -137,6 +137,7 @@ export class OrderService {
                         return {
                             inventoryItemId: inventoryItem._id,
                             departmentId: part.departmentId,
+                            inventoryCategory: inventoryItem.category || 'General',
                             quantity: Math.round(part.quantity * 10000) / 10000,
                             unitCost: inventoryItem.costPerUnit,
                         };
@@ -156,7 +157,7 @@ export class OrderService {
                     }
                     await consumeKitchenLots(KitchenStockLot, { restaurantId: data.restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId }, quantity, session);
                     await StockMovement.create([{
-                        restaurantId: data.restaurantId, inventoryItemId: part.inventoryItemId, departmentId: part.departmentId, orderId: order._id,
+                        restaurantId: data.restaurantId, inventoryItemId: part.inventoryItemId, departmentId: part.departmentId, inventoryCategory: part.inventoryCategory, orderId: order._id,
                         type: 'usage', quantity: -quantity, stockBefore: before.currentStock,
                         stockAfter: Math.round((before.currentStock - quantity) * 10000) / 10000,
                         unitCost: part.unitCost, note: `Reserved for order ${order._id}`,
@@ -253,8 +254,9 @@ export class OrderService {
                         );
                         if (!before) throw new Error('Not enough stock to serve this order. Check the inventory quantity and recipe, then try again.');
                         part.unitCost = before.costPerUnit;
+                        part.inventoryCategory = before.category || 'General';
                         await StockMovement.create([{
-                            restaurantId, inventoryItemId: before._id, orderId: order._id,
+                            restaurantId, inventoryItemId: before._id, inventoryCategory: part.inventoryCategory, orderId: order._id,
                             type: 'usage', quantity: -quantity, stockBefore: before.currentStock,
                             stockAfter: Math.round((before.currentStock - quantity) * 10000) / 10000,
                             unitCost: before.costPerUnit, note: `Served order ${order._id}`,
@@ -271,14 +273,14 @@ export class OrderService {
                                 { $inc: { currentStock: part.quantity }, $setOnInsert: { restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId } },
                                 { session, new: true, upsert: true, setDefaultsOnInsert: true },
                             );
-                            const inventoryItem = await InventoryItem.findOne({ _id: part.inventoryItemId, restaurantId }).select('wasteBehavior').session(session);
+                            const inventoryItem = await InventoryItem.findOne({ _id: part.inventoryItemId, restaurantId }).select('expiryDays wasteBehavior category').session(session);
                             await createKitchenLot(KitchenStockLot, {
                                 restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId,
-                                quantity: part.quantity, wasteBehavior: inventoryItem?.wasteBehavior || 'carry_forward', unitCost: part.unitCost,
+                                quantity: part.quantity, expiryDays: effectiveExpiryDays(inventoryItem || {}), unitCost: part.unitCost,
                             }, session);
                             await StockMovement.create([{
                                 restaurantId, inventoryItemId: part.inventoryItemId, departmentId: part.departmentId, orderId: order._id,
-                                type: 'return', quantity: part.quantity, stockBefore: after.currentStock - part.quantity,
+                                type: 'return', inventoryCategory: part.inventoryCategory || inventoryItem?.category || 'General', quantity: part.quantity, stockBefore: after.currentStock - part.quantity,
                                 stockAfter: after.currentStock, unitCost: part.unitCost, note: `Cancelled order ${order._id}`,
                             }], { session });
                             continue;

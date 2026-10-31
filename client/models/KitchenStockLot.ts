@@ -8,7 +8,9 @@ export interface IKitchenStockLot extends Document {
     remainingQuantity: number;
     issuedAt: Date;
     expiresAt: Date;
-    wasteBehavior: 'carry_forward' | 'perishable';
+    expiryDays?: number;
+    /** @deprecated Legacy snapshot retained for older lots. */
+    wasteBehavior?: 'carry_forward' | 'perishable';
     unitCost: number;
     baselineKey?: string;
     expiredAt?: Date;
@@ -22,7 +24,8 @@ const schema = new Schema<IKitchenStockLot>({
     remainingQuantity: { type: Number, required: true, min: 0 },
     issuedAt: { type: Date, required: true },
     expiresAt: { type: Date, required: true },
-    wasteBehavior: { type: String, enum: ['carry_forward', 'perishable'], required: true },
+    expiryDays: { type: Number, min: 1, max: 3650 },
+    wasteBehavior: { type: String, enum: ['carry_forward', 'perishable'] },
     unitCost: { type: Number, required: true, min: 0, default: 0 },
     baselineKey: { type: String },
     expiredAt: Date,

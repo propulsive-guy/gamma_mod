@@ -37,6 +37,12 @@ function resultError(label: string, error: unknown, fallback: string) {
 function withoutInventoryDetails(order: any) {
     if (!order) return order;
     const { inventoryUsage, inventoryRestored, inventoryDeducted, ...publicFields } = order;
+    if (Array.isArray(publicFields.items)) {
+        publicFields.items = publicFields.items.map((item: any) => {
+            const { recipeSnapshot, ...publicItem } = item;
+            return publicItem;
+        });
+    }
     return publicFields;
 }
 
@@ -209,7 +215,7 @@ export async function createOrder(data: any) {
 
             if (inventoryTrackingEnabled) {
                 await seedLegacyKitchenLots({ Lot: KitchenStockLot, KitchenStock, InventoryItem }, restaurantId, activeSession);
-                await expireDueKitchenLots({ Lot: KitchenStockLot, KitchenStock, StockMovement }, restaurantId, activeSession);
+                await expireDueKitchenLots({ Lot: KitchenStockLot, KitchenStock, StockMovement, InventoryItem }, restaurantId, activeSession);
             }
 
             const table = await Table.findOne({ _id: tableId, restaurantId, isActive: true }).session(activeSession);
@@ -302,6 +308,22 @@ export async function createOrder(data: any) {
                 ? await InventoryItem.find({ _id: { $in: requiredIds }, restaurantId, isActive: true }).session(activeSession)
                 : [];
             const stockById = new Map(stockItems.map((item) => [String(item._id), item]));
+            order.items = orderItems.map((line: any) => {
+                const menuItem = itemsById.get(String(line.menuItemId));
+                const recipeSnapshot = inventoryTrackingEnabled && menuItem?.departmentId
+                    ? (menuItem.recipe || []).map((part: any) => {
+                        const inventoryItem = stockById.get(String(part.inventoryItemId));
+                        return {
+                            inventoryItemId: part.inventoryItemId,
+                            quantity: roundQuantity(Number(part.quantity || 0)),
+                            inventoryCategory: inventoryItem?.category || 'Uncategorized',
+                            unitCost: Number(inventoryItem?.costPerUnit || 0),
+                            unit: inventoryItem?.unit || '',
+                        };
+                    })
+                    : [];
+                return { ...line, recipeSnapshot };
+            }) as any;
             const usage = inventoryTrackingEnabled
                 ? [...required.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, part]) => {
                     const inventoryItem = stockById.get(String(part.inventoryItemId));
@@ -309,6 +331,7 @@ export async function createOrder(data: any) {
                     return {
                         inventoryItemId: inventoryItem._id,
                         departmentId: part.departmentId,
+                        inventoryCategory: inventoryItem.category || 'Uncategorized',
                         quantity: roundQuantity(part.quantity),
                         unitCost: inventoryItem.costPerUnit,
                     };
@@ -336,6 +359,7 @@ export async function createOrder(data: any) {
                     restaurantId,
                     inventoryItemId: part.inventoryItemId,
                     departmentId: part.departmentId,
+                    inventoryCategory: part.inventoryCategory,
                     orderId: order._id,
                     type: 'usage',
                     quantity: -quantity,

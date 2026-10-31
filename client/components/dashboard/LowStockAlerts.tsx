@@ -63,7 +63,7 @@ export default function LowStockAlerts({ restaurantId }: { restaurantId?: string
         if (!socket) return;
         const onNewOrder = () => {
             void refresh();
-            if (pathname === '/dashboard/inventory') router.refresh();
+            if (pathname === '/dashboard/inventory' || pathname === '/dashboard/store') router.refresh();
         };
         socket.on('new-order', onNewOrder);
         return () => { socket.off('new-order', onNewOrder); };

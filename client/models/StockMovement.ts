@@ -11,7 +11,9 @@ export interface IStockMovement extends Document {
     stockBefore: number;
     stockAfter: number;
     unitCost?: number;
+    inventoryCategory?: string;
     note?: string;
+    movementDate?: Date;
     createdAt: Date;
 }
 
@@ -26,11 +28,14 @@ const stockMovementSchema = new Schema<IStockMovement>({
     stockBefore: { type: Number, required: true, min: 0 },
     stockAfter: { type: Number, required: true, min: 0 },
     unitCost: { type: Number, min: 0 },
+    inventoryCategory: { type: String, trim: true, maxlength: 80 },
     note: { type: String, trim: true, maxlength: 300, default: '' },
+    movementDate: Date,
 }, { timestamps: true });
 
 stockMovementSchema.index({ restaurantId: 1, createdAt: -1 });
 stockMovementSchema.index({ inventoryItemId: 1, createdAt: -1 });
+stockMovementSchema.index({ restaurantId: 1, movementDate: -1 });
 
 const StockMovement: Model<IStockMovement> = mongoose.models.StockMovement || mongoose.model<IStockMovement>('StockMovement', stockMovementSchema);
 export default StockMovement;
