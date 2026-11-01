@@ -12,7 +12,7 @@ interface PaymentRestaurant {
     merchantCode?: string;
 }
 
-export function OrderPaymentQr({ restaurant, amount, orderId }: { restaurant: PaymentRestaurant; amount: number; orderId: string }) {
+export function OrderPaymentQr({ restaurant, amount, orderId, paymentReceived = false }: { restaurant: PaymentRestaurant; amount: number; orderId: string; paymentReceived?: boolean }) {
     const [qr, setQr] = useState('');
     const [failed, setFailed] = useState(false);
     const upiId = restaurant.upiId?.trim() || '';
@@ -56,9 +56,9 @@ export function OrderPaymentQr({ restaurant, amount, orderId }: { restaurant: Pa
         <div className="flex flex-col items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-center sm:flex-row sm:text-left">
             <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white text-emerald-700"><QrCodeIcon className="h-6 w-6" /></div>
             <div className="min-w-0 flex-1">
-                <p className="inline-flex items-center gap-1 text-sm font-bold text-emerald-950"><CheckCircleIcon className="h-4 w-4" /> Order complete · scan to pay</p>
+                <p className="inline-flex items-center gap-1 text-sm font-bold text-emerald-950"><CheckCircleIcon className="h-4 w-4" /> {paymentReceived ? 'Payment recorded · QR available' : 'Order complete · scan to pay'}</p>
                 <p className="mt-1 text-lg font-extrabold text-slate-950">{formatCurrency(amount)}</p>
-                <p className="text-xs text-slate-600">Ask the customer to scan with any UPI app. Confirm payment in Orders after it arrives.</p>
+                <p className="text-xs text-slate-600">{paymentReceived ? 'Payment is marked received. Reopening this QR could result in a duplicate payment.' : 'Ask the customer to scan with any UPI app. After checking that payment arrived, tap Payment received.'}</p>
             </div>
             <div className="grid h-40 w-40 shrink-0 place-items-center rounded-xl border border-emerald-100 bg-white p-2">
                 {qr ? <img src={qr} alt={`UPI payment QR for ${formatCurrency(amount)}`} className="h-full w-full object-contain" />

@@ -668,7 +668,66 @@ export async function transferCaptainOrder(captainKey: string, sourceTableId: st
     }
 }
 
-/** Complete an order from the waiter screen and ensure any not-yet-reserved recipe stock is deducted. */
+/** Mark an order served from the public waiter link and account for any legacy stock not yet deducted. */
+export async function markCaptainOrderServed(captainKey: string, sourceTableId: string, orderId: string) {
+    let session: mongoose.ClientSession | null = null;
+    let updatedOrder: any = null;
+    try {
+        if (!mongoose.Types.ObjectId.isValid(sourceTableId) || !mongoose.Types.ObjectId.isValid(orderId)) {
+            return { success: false, error: 'Choose a valid order.' };
+        }
+        await dbConnect();
+        const restaurantId = await captainRestaurantId(captainKey);
+        if (!restaurantId) return { success: false, error: 'This waiter link is no longer valid.' };
+        const activeSession = await mongoose.startSession();
+        session = activeSession;
+        await activeSession.withTransaction(async () => {
+            const order = await Order.findOne({ _id: orderId, restaurantId, tableId: sourceTableId })
+                .select('+inventoryUsage +inventoryDeducted')
+                .session(activeSession);
+            if (!order || order.status === 'cancelled' || order.status === 'completed') {
+                throw new Error('This order can no longer be marked as served. Refresh the table orders.');
+            }
+            if (order.paymentStatus === 'paid') throw new Error('This order is already paid.');
+            const restaurant = await Restaurant.findById(restaurantId).select('inventoryTrackingEnabled').session(activeSession);
+            if (restaurant?.inventoryTrackingEnabled !== false && order.inventoryDeducted === false && order.inventoryUsage?.length) {
+                await seedLegacyKitchenLots({ Lot: KitchenStockLot, KitchenStock, InventoryItem }, restaurantId, activeSession);
+                await expireDueKitchenLots({ Lot: KitchenStockLot, KitchenStock, StockMovement, InventoryItem }, restaurantId, activeSession);
+                for (const part of [...order.inventoryUsage].sort((left: any, right: any) => String(left.inventoryItemId).localeCompare(String(right.inventoryItemId)))) {
+                    const quantity = roundQuantity(Number(part.quantity));
+                    const before = await KitchenStock.findOneAndUpdate(
+                        { restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId, currentStock: { $gte: quantity } },
+                        { $inc: { currentStock: -quantity } }, { session: activeSession },
+                    );
+                    if (!before) throw new Error('Not enough kitchen stock to serve this order.');
+                    await consumeKitchenLots(KitchenStockLot, { restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId }, quantity, activeSession);
+                    await StockMovement.create([{
+                        restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId,
+                        inventoryCategory: part.inventoryCategory, orderId: order._id, type: 'usage', quantity: -quantity,
+                        stockBefore: before.currentStock, stockAfter: roundQuantity(before.currentStock - quantity),
+                        unitCost: part.unitCost, note: `Served waiter order ${order._id}`,
+                    }], { session: activeSession });
+                }
+                order.inventoryDeducted = true;
+            } else if (order.inventoryDeducted === undefined) {
+                order.inventoryDeducted = true;
+            }
+            order.status = 'served';
+            await order.save({ session: activeSession });
+            await order.populate('tableId', 'tableNumber');
+            updatedOrder = withoutInventoryDetails(order.toObject());
+        });
+        revalidatePath('/dashboard/orders');
+        if (!updatedOrder) return { success: false, error: 'Could not mark this order as served.' };
+        return { success: true, data: captainOrderResult(updatedOrder) };
+    } catch (error) {
+        return { success: false, error: resultError('Mark waiter order served error:', error, 'Could not mark this order as served.') };
+    } finally {
+        if (session) await session.endSession();
+    }
+}
+
+/** Complete a served order from the waiter screen and prepare it for payment. */
 export async function completeCaptainOrder(captainKey: string, sourceTableId: string, orderId: string) {
     let session: mongoose.ClientSession | null = null;
     let updatedOrder: any = null;
@@ -683,7 +742,7 @@ export async function completeCaptainOrder(captainKey: string, sourceTableId: st
             const order = await Order.findOne({ _id: orderId, restaurantId, tableId: sourceTableId })
                 .select('+inventoryUsage +inventoryDeducted')
                 .session(activeSession);
-            if (!order || order.status === 'cancelled') throw new Error('This order is not open. Refresh the table orders.');
+            if (!order || order.status !== 'served') throw new Error('Mark this order as served before completing it.');
             if (order.paymentStatus === 'paid') throw new Error('This order is already paid.');
             const restaurant = await Restaurant.findById(restaurantId).select('inventoryTrackingEnabled').session(activeSession);
             if (restaurant?.inventoryTrackingEnabled !== false && order.inventoryDeducted === false && order.inventoryUsage?.length) {
@@ -718,6 +777,29 @@ export async function completeCaptainOrder(captainKey: string, sourceTableId: st
         return { success: false, error: resultError('Complete waiter order error:', error, 'Could not complete this order.') };
     } finally {
         if (session) await session.endSession();
+    }
+}
+
+/** Record a captain's manual confirmation after checking that the UPI payment arrived. */
+export async function markCaptainOrderPaid(captainKey: string, tableId: string, orderId: string) {
+    try {
+        if (!mongoose.Types.ObjectId.isValid(tableId) || !mongoose.Types.ObjectId.isValid(orderId)) {
+            return { success: false, error: 'Choose a valid table order.' };
+        }
+        await dbConnect();
+        const restaurantId = await captainRestaurantId(captainKey);
+        if (!restaurantId) return { success: false, error: 'This waiter link is no longer valid.' };
+        const order = await Order.findOneAndUpdate(
+            { _id: orderId, restaurantId, tableId, status: 'completed', paymentStatus: { $ne: 'paid' } },
+            { $set: { paymentStatus: 'paid', paymentMethod: 'upi', paidAt: new Date() } },
+            { new: true },
+        ).select('items.name items.price items.quantity total status paymentStatus paymentMethod orderType orderChannel checkout customerName customerPhone notes createdAt updatedAt')
+            .populate('tableId', 'tableNumber').lean();
+        if (!order) return { success: false, error: 'Only a completed, unpaid order can be marked as paid.' };
+        revalidatePath('/dashboard/orders');
+        return { success: true, data: captainOrderResult(order) };
+    } catch (error) {
+        return { success: false, error: resultError('Mark waiter payment error:', error, 'Could not record this payment.') };
     }
 }
 

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowPathIcon, ArrowRightIcon, CheckCircleIcon, PencilSquareIcon, PrinterIcon, TableCellsIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { toast } from 'react-hot-toast';
-import { completeCaptainOrder, editCaptainOrder, getCaptainTableOrders, transferCaptainOrder } from '@/app/actions/order';
+import { completeCaptainOrder, editCaptainOrder, getCaptainTableOrders, markCaptainOrderPaid, markCaptainOrderServed, transferCaptainOrder } from '@/app/actions/order';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import BillModal from '@/components/dashboard/BillModal';
 import { OrderPaymentQr } from './OrderPaymentQr';
@@ -80,6 +80,7 @@ export function CaptainOrdersPanel({
     const [newMenuItemId, setNewMenuItemId] = useState('');
     const [savingEdit, setSavingEdit] = useState(false);
     const [billOrder, setBillOrder] = useState<Order | null>(null);
+    const [qrVisibility, setQrVisibility] = useState<Record<string, boolean>>({});
 
     const refresh = useCallback(async (showSpinner = false) => {
         if (showSpinner) setRefreshing(true);
@@ -170,9 +171,39 @@ export function CaptainOrdersPanel({
             const result = await completeCaptainOrder(captainKey, table._id, order._id);
             if (!result.success) throw new Error(result.error || 'Could not complete this order.');
             setOrders((current) => current.map((currentOrder) => currentOrder._id === order._id ? result.data as Order : currentOrder));
+            setQrVisibility((current) => ({ ...current, [order._id]: true }));
             toast.success('Order completed. Show the QR to collect payment.');
         } catch (error) {
             toast.error(error instanceof Error ? error.message : 'Could not complete this order.');
+        } finally {
+            setBusyOrderId('');
+        }
+    };
+
+    const markOrderServed = async (order: Order) => {
+        setBusyOrderId(order._id);
+        try {
+            const result = await markCaptainOrderServed(captainKey, table._id, order._id);
+            if (!result.success) throw new Error(result.error || 'Could not mark this order as served.');
+            setOrders((current) => current.map((currentOrder) => currentOrder._id === order._id ? result.data as Order : currentOrder));
+            toast.success('Order marked as served. Complete it when you are ready to collect payment.');
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : 'Could not mark this order as served.');
+        } finally {
+            setBusyOrderId('');
+        }
+    };
+
+    const recordPaymentReceived = async (order: Order) => {
+        setBusyOrderId(order._id);
+        try {
+            const result = await markCaptainOrderPaid(captainKey, table._id, order._id);
+            if (!result.success) throw new Error(result.error || 'Could not record this payment.');
+            setOrders((current) => current.map((currentOrder) => currentOrder._id === order._id ? result.data as Order : currentOrder));
+            setQrVisibility((current) => ({ ...current, [order._id]: false }));
+            toast.success('Payment recorded. You can reopen this order’s QR at any time.');
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : 'Could not record this payment.');
         } finally {
             setBusyOrderId('');
         }
@@ -204,6 +235,9 @@ export function CaptainOrdersPanel({
                     {orders.map((order) => {
                         const closed = order.status === 'completed' || order.status === 'cancelled';
                         const payable = orderAmount(order);
+                        const qrOpen = Object.prototype.hasOwnProperty.call(qrVisibility, order._id)
+                            ? qrVisibility[order._id]
+                            : order.status === 'completed' && order.paymentStatus !== 'paid';
                         return (
                             <article key={order._id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                                 <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-5">
@@ -241,12 +275,15 @@ export function CaptainOrdersPanel({
                                             <button type="button" disabled={busyOrderId === order._id || !transferTargets[order._id]} onClick={() => void transferOrder(order)} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-slate-100 px-3 text-xs font-bold text-slate-700 disabled:opacity-40"><ArrowRightIcon className="h-4 w-4" /> Move</button>
                                         </div>
                                     )}
-                                    {!closed && order.paymentStatus !== 'paid' && <button type="button" disabled={busyOrderId === order._id} onClick={() => void completeOrder(order)} className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-700 px-4 text-xs font-bold text-white hover:bg-emerald-800 disabled:opacity-60 sm:ml-auto sm:w-auto"><CheckCircleIcon className="h-4 w-4" /> {busyOrderId === order._id ? 'Completing…' : 'Complete order'}</button>}
+                                    {!closed && order.paymentStatus !== 'paid' && order.status !== 'served' && <button type="button" disabled={busyOrderId === order._id} onClick={() => void markOrderServed(order)} className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-violet-700 px-4 text-xs font-bold text-white hover:bg-violet-800 disabled:opacity-60 sm:ml-auto sm:w-auto"><CheckCircleIcon className="h-4 w-4" /> {busyOrderId === order._id ? 'Saving…' : 'Mark as served'}</button>}
+                                    {!closed && order.paymentStatus !== 'paid' && order.status === 'served' && <button type="button" disabled={busyOrderId === order._id} onClick={() => void completeOrder(order)} className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-700 px-4 text-xs font-bold text-white hover:bg-emerald-800 disabled:opacity-60 sm:ml-auto sm:w-auto"><CheckCircleIcon className="h-4 w-4" /> {busyOrderId === order._id ? 'Completing…' : 'Complete order'}</button>}
+                                    {order.status === 'completed' && <button type="button" onClick={() => setQrVisibility((current) => ({ ...current, [order._id]: !qrOpen }))} aria-expanded={qrOpen} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-xs font-bold text-emerald-800 hover:bg-emerald-100">{qrOpen ? 'Close QR' : order.paymentStatus === 'paid' ? 'View payment QR' : 'Show payment QR'}</button>}
+                                    {order.status === 'completed' && order.paymentStatus !== 'paid' && qrOpen && <button type="button" disabled={busyOrderId === order._id} onClick={() => void recordPaymentReceived(order)} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-sky-700 px-3 text-xs font-bold text-white hover:bg-sky-800 disabled:opacity-60">{busyOrderId === order._id ? 'Saving…' : 'Payment received'}</button>}
                                 </div>
 
-                                {order.status === 'completed' && order.paymentStatus !== 'paid' && (
+                                {order.status === 'completed' && qrOpen && (
                                     <div className="px-4 pb-4 sm:px-5 sm:pb-5">
-                                        <OrderPaymentQr restaurant={restaurant} amount={payable} orderId={order._id} />
+                                        <OrderPaymentQr restaurant={restaurant} amount={payable} orderId={order._id} paymentReceived={order.paymentStatus === 'paid'} />
                                     </div>
                                 )}
                             </article>
