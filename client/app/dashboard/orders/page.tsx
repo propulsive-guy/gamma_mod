@@ -36,7 +36,7 @@ export default async function OrdersPage() {
             .populate('tableId', 'tableNumber')
             .sort({ createdAt: -1 })
             .lean(),
-        Restaurant.findById(session.user.restaurantId).select('name gstNumber fssaiNumber gstPercentage sgstPercentage packagingCharge address phone').lean()
+        Restaurant.findById(session.user.restaurantId).select('name gstNumber fssaiNumber gstPercentage sgstPercentage packagingCharge address phone upiId upiPayeeName merchantCode').lean()
     ]);
     const ordersById = new Map([...recentOrders, ...outstandingOrders].map(order => [String(order._id), order]));
     const orders = [...ordersById.values()].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());

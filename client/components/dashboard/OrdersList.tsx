@@ -43,8 +43,12 @@ interface Restaurant {
     fssaiNumber?: string;
     gstPercentage?: number;
     sgstPercentage?: number;
+    packagingCharge?: number;
     address?: string;
     phone?: string;
+    upiId?: string;
+    upiPayeeName?: string;
+    merchantCode?: string;
 }
 
 const FILTER_TABS = [

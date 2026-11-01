@@ -1,10 +1,11 @@
 'use client';
 
-import { Fragment, useRef } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Dialog, Transition } from '@headlessui/react';
 import { XMarkIcon, PrinterIcon } from '@heroicons/react/24/outline';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { useReactToPrint } from 'react-to-print';
+import QRCode from 'qrcode';
 
 interface Restaurant {
     name: string;
@@ -15,6 +16,9 @@ interface Restaurant {
     packagingCharge?: number;
     address?: string;
     phone?: string;
+    upiId?: string;
+    upiPayeeName?: string;
+    merchantCode?: string;
 }
 
 interface BillModalProps {
@@ -25,24 +29,64 @@ interface BillModalProps {
 }
 
 export default function BillModal({ isOpen, onClose, order, restaurant }: BillModalProps) {
-    const componentRef = useRef(null);
+    const componentRef = useRef<HTMLDivElement>(null);
+    const [qrCodeSvg, setQrCodeSvg] = useState('');
+    const [qrCodeError, setQrCodeError] = useState(false);
+    const [qrAttempt, setQrAttempt] = useState(0);
 
-    const handlePrint = useReactToPrint({
-        contentRef: componentRef,
-        documentTitle: `Bill-${order?._id?.slice(-6)}`,
-    });
-
-    if (!order) return null;
-
-    // Calculate totals
-    const subtotal = order.total;
-    const checkout = typeof order.checkout?.payableAmount === 'number' ? order.checkout : null;
+    const subtotal = Number(order?.total || 0);
+    const checkout = typeof order?.checkout?.payableAmount === 'number' ? order.checkout : null;
     const gstRate = checkout?.gstRate ?? restaurant.gstPercentage ?? 0;
     const sgstRate = checkout?.sgstRate ?? restaurant.sgstPercentage ?? 0;
     const gstAmount = checkout ? checkout.gstAmount : (subtotal * gstRate) / 100;
     const sgstAmount = checkout ? checkout.sgstAmount : (subtotal * sgstRate) / 100;
-    const packagingCharge = checkout ? Number(checkout.packagingCharge || 0) : order.orderType === 'takeaway' ? Number(restaurant.packagingCharge || 0) : 0;
+    const packagingCharge = checkout ? Number(checkout.packagingCharge || 0) : order?.orderType === 'takeaway' ? Number(restaurant.packagingCharge || 0) : 0;
     const grandTotal = checkout ? checkout.payableAmount : subtotal + gstAmount + sgstAmount + packagingCharge;
+    const paymentAmount = Number(grandTotal.toFixed(2));
+    const upiUri = useMemo(() => {
+        const payee = restaurant.upiId?.trim();
+        if (!order || order.paymentStatus === 'paid' || !payee || paymentAmount <= 0) return '';
+        const params = new URLSearchParams({
+            pa: payee,
+            pn: restaurant.upiPayeeName?.trim() || restaurant.name,
+            am: paymentAmount.toFixed(2),
+            cu: 'INR',
+            tn: `Bill ${String(order._id).slice(-6).toUpperCase()}`,
+            tr: String(order._id),
+        });
+        if (restaurant.merchantCode?.trim()) params.set('mc', restaurant.merchantCode.trim());
+        return `upi://pay?${params.toString()}`;
+    }, [order, paymentAmount, restaurant.merchantCode, restaurant.name, restaurant.upiId, restaurant.upiPayeeName]);
+
+    useEffect(() => {
+        let active = true;
+        setQrCodeSvg('');
+        setQrCodeError(false);
+        if (!isOpen || !upiUri) return () => { active = false; };
+        void QRCode.toString(upiUri, { type: 'svg', errorCorrectionLevel: 'H', margin: 2, width: 320 })
+            .then((svg) => { if (active) setQrCodeSvg(svg); })
+            .catch(() => { if (active) setQrCodeError(true); });
+        return () => { active = false; };
+    }, [isOpen, qrAttempt, upiUri]);
+
+    const handlePrint = useReactToPrint({
+        contentRef: componentRef,
+        documentTitle: `Bill-${order?._id?.slice(-6)}`,
+        pageStyle: `
+            @page { size: 80mm auto; margin: 3mm; }
+            @media print {
+                html, body { width: 74mm !important; margin: 0 !important; padding: 0 !important; }
+                body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                .bill-print { width: 74mm !important; max-width: 74mm !important; padding: 0 !important; margin: 0 auto !important; font-size: 10px !important; }
+                .bill-print table { page-break-inside: auto; }
+                .bill-print tr { page-break-inside: avoid; page-break-after: auto; }
+                .bill-payment-qr { display: block !important; visibility: visible !important; width: 34mm !important; height: 34mm !important; margin: 2mm auto !important; break-inside: avoid; }
+                .bill-payment-qr svg { display: block !important; visibility: visible !important; width: 34mm !important; height: 34mm !important; }
+            }
+        `,
+    });
+
+    if (!order) return null;
 
     // Display helpers
     const showGst = gstRate > 0;
@@ -90,7 +134,7 @@ export default function BillModal({ isOpen, onClose, order, restaurant }: BillMo
 
                                 <div className="p-6 overflow-y-auto max-h-[80vh]">
                                     {/* Printable Area */}
-                                    <div ref={componentRef} className="bg-white p-4 print:p-0 text-sm">
+                                    <div ref={componentRef} className="bill-print bg-white p-4 print:p-0 text-sm">
                                         <div className="text-center mb-6">
                                             <h2 className="text-xl font-bold text-gray-900 uppercase tracking-widest">{restaurant.name}</h2>
                                             {restaurant.address && <p className="text-gray-500 text-xs mt-1">{restaurant.address}</p>}
@@ -180,6 +224,27 @@ export default function BillModal({ isOpen, onClose, order, restaurant }: BillMo
                                             </div>
                                         </div>
 
+                                        {upiUri && (
+                                            <div className="mt-5 border-t border-dashed border-gray-300 pt-4 text-center">
+                                                <p className="font-bold text-gray-900">Scan to pay {formatCurrency(paymentAmount)}</p>
+                                                <p className="mt-1 text-[10px] text-gray-500">{restaurant.upiPayeeName?.trim() || restaurant.name}</p>
+                                                {qrCodeSvg ? (
+                                                    <div
+                                                        className="bill-payment-qr mx-auto mt-2 h-36 w-36 print:h-32 print:w-32"
+                                                        role="img"
+                                                        aria-label={`Dynamic UPI payment QR for ${formatCurrency(paymentAmount)}`}
+                                                        dangerouslySetInnerHTML={{ __html: qrCodeSvg }}
+                                                    />
+                                                ) : (
+                                                    <div className="mx-auto mt-3 flex min-h-32 w-40 flex-col items-center justify-center gap-2 rounded-lg border border-gray-200 px-2 text-[10px] text-gray-500">
+                                                        <span>{qrCodeError ? 'Could not create the payment QR.' : 'Preparing payment QR…'}</span>
+                                                        {qrCodeError && <button type="button" onClick={() => setQrAttempt((attempt) => attempt + 1)} className="font-semibold text-sky-700 print:hidden">Retry QR</button>}
+                                                    </div>
+                                                )}
+                                                <p className="mt-1 break-all text-[10px] text-gray-500">UPI: {restaurant.upiId}</p>
+                                            </div>
+                                        )}
+
                                         <div className="mt-8 text-center text-xs text-gray-400 print:block hidden">
                                             <p>Generated via BitByte</p>
                                         </div>
@@ -193,12 +258,18 @@ export default function BillModal({ isOpen, onClose, order, restaurant }: BillMo
                                     >
                                         Close
                                     </button>
+                                    {upiUri && (
+                                        <a href={upiUri} className="inline-flex items-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">
+                                            Open UPI app
+                                        </a>
+                                    )}
                                     <button
+                                        disabled={!!upiUri && !qrCodeSvg}
                                         onClick={() => handlePrint && handlePrint()}
-                                        className="flex items-center gap-2 px-4 py-2 bg-sky-500 text-white rounded-lg text-sm font-medium hover:bg-sky-600 shadow-md shadow-sky-500/20"
+                                        className="flex items-center gap-2 px-4 py-2 bg-sky-500 text-white rounded-lg text-sm font-medium hover:bg-sky-600 shadow-md shadow-sky-500/20 disabled:cursor-not-allowed disabled:opacity-60"
                                     >
                                         <PrinterIcon className="w-4 h-4" />
-                                        Print Bill
+                                        {upiUri && !qrCodeSvg ? (qrCodeError ? 'QR unavailable' : 'Preparing QR…') : 'Print Bill'}
                                     </button>
                                 </div>
                             </Dialog.Panel>
