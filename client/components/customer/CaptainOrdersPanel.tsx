@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowPathIcon, ArrowRightIcon, CheckCircleIcon, PencilSquareIcon, PrinterIcon, TableCellsIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { toast } from 'react-hot-toast';
-import { completeCaptainOrder, editCaptainOrder, getCaptainTableOrders, markCaptainOrderPaid, markCaptainOrderServed, transferCaptainOrder } from '@/app/actions/order';
+import { completeCaptainOrder, editCaptainOrder, getCaptainRestaurantOrders, getCaptainTableOrders, markCaptainOrderPaid, markCaptainOrderServed, transferCaptainOrder } from '@/app/actions/order';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import BillModal from '@/components/dashboard/BillModal';
 import { OrderPaymentQr } from './OrderPaymentQr';
@@ -92,12 +92,14 @@ export function CaptainOrdersPanel({
     tables,
     menuItems,
     restaurant,
+    allTables = false,
 }: {
     captainKey: string;
     table: TableOption;
     tables: TableOption[];
     menuItems: MenuItem[];
     restaurant: Restaurant;
+    allTables?: boolean;
 }) {
     const [orders, setOrders] = useState<Order[]>([]);
     const [loading, setLoading] = useState(true);
@@ -115,7 +117,9 @@ export function CaptainOrdersPanel({
     const refresh = useCallback(async (showSpinner = false) => {
         if (showSpinner) setRefreshing(true);
         try {
-            const result = await getCaptainTableOrders(captainKey, table._id);
+            const result = allTables
+                ? await getCaptainRestaurantOrders(captainKey)
+                : await getCaptainTableOrders(captainKey, table._id);
             if (!result.success) throw new Error(result.error || 'Could not load table orders.');
             setOrders((result.orders || []) as Order[]);
         } catch (error) {
@@ -124,7 +128,7 @@ export function CaptainOrdersPanel({
             setLoading(false);
             setRefreshing(false);
         }
-    }, [captainKey, table._id]);
+    }, [allTables, captainKey, table._id]);
 
     useEffect(() => {
         setOrders([]);
@@ -138,7 +142,10 @@ export function CaptainOrdersPanel({
 
     const openEditor = (order: Order) => {
         setEditingOrder(order);
-        setDraftLines(order.items.map((item) => ({ menuItemId: String(item.menuItemId || ''), quantity: item.quantity })));
+        setDraftLines(order.items.map((item) => {
+            const matchingMenuItem = editableMenu.find((candidate) => candidate.name.trim().toLocaleLowerCase() === item.name.trim().toLocaleLowerCase());
+            return { menuItemId: String(item.menuItemId || matchingMenuItem?._id || ''), quantity: item.quantity };
+        }));
         setDraftNotes(order.notes || '');
         setNewMenuItemId('');
     };
@@ -167,7 +174,7 @@ export function CaptainOrdersPanel({
         }
         setSavingEdit(true);
         try {
-            const result = await editCaptainOrder(captainKey, table._id, editingOrder._id, draftLines, draftNotes);
+            const result = await editCaptainOrder(captainKey, tableIdOf(editingOrder), editingOrder._id, draftLines, draftNotes);
             if (!result.success) throw new Error(result.error || 'Could not update this order.');
             setOrders((current) => current.map((order) => order._id === editingOrder._id ? result.data as Order : order));
             setEditingOrder(null);
@@ -184,9 +191,11 @@ export function CaptainOrdersPanel({
         if (!targetTableId) { toast.error('Choose the destination table first.'); return; }
         setBusyOrderId(order._id);
         try {
-            const result = await transferCaptainOrder(captainKey, table._id, order._id, targetTableId);
+            const result = await transferCaptainOrder(captainKey, tableIdOf(order), order._id, targetTableId);
             if (!result.success) throw new Error(result.error || 'Could not transfer this order.');
-            setOrders((current) => current.filter((currentOrder) => currentOrder._id !== order._id));
+            setOrders((current) => allTables
+                ? current.map((currentOrder) => currentOrder._id === order._id ? result.data as Order : currentOrder)
+                : current.filter((currentOrder) => currentOrder._id !== order._id));
             toast.success(`Order moved to Table ${tables.find((item) => item._id === targetTableId)?.tableNumber || ''}.`);
         } catch (error) {
             toast.error(error instanceof Error ? error.message : 'Could not transfer this order.');
@@ -198,7 +207,7 @@ export function CaptainOrdersPanel({
     const completeOrder = async (order: Order) => {
         setBusyOrderId(order._id);
         try {
-            const result = await completeCaptainOrder(captainKey, table._id, order._id);
+            const result = await completeCaptainOrder(captainKey, tableIdOf(order), order._id);
             if (!result.success) throw new Error(result.error || 'Could not complete this order.');
             setOrders((current) => current.map((currentOrder) => currentOrder._id === order._id ? result.data as Order : currentOrder));
             setQrVisibility((current) => ({ ...current, [order._id]: true }));
@@ -213,7 +222,7 @@ export function CaptainOrdersPanel({
     const markOrderServed = async (order: Order) => {
         setBusyOrderId(order._id);
         try {
-            const result = await markCaptainOrderServed(captainKey, table._id, order._id);
+            const result = await markCaptainOrderServed(captainKey, tableIdOf(order), order._id);
             if (!result.success) throw new Error(result.error || 'Could not mark this order as served.');
             setOrders((current) => current.map((currentOrder) => currentOrder._id === order._id ? result.data as Order : currentOrder));
             toast.success('Order marked as served. Complete it when you are ready to collect payment.');
@@ -227,7 +236,7 @@ export function CaptainOrdersPanel({
     const recordPaymentReceived = async (order: Order) => {
         setBusyOrderId(order._id);
         try {
-            const result = await markCaptainOrderPaid(captainKey, table._id, order._id);
+            const result = await markCaptainOrderPaid(captainKey, tableIdOf(order), order._id);
             if (!result.success) throw new Error(result.error || 'Could not record this payment.');
             setOrders((current) => current.map((currentOrder) => currentOrder._id === order._id ? result.data as Order : currentOrder));
             setQrVisibility((current) => ({ ...current, [order._id]: false }));
@@ -247,9 +256,9 @@ export function CaptainOrdersPanel({
         <section className="mx-auto min-h-[70vh] max-w-6xl space-y-4 bg-slate-50 px-4 py-5 sm:px-6 sm:py-7">
             <div className="flex flex-wrap items-end justify-between gap-3">
                 <div>
-                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-700">Table {table.tableNumber}</p>
+                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-700">{allTables ? 'All tables' : `Table ${table.tableNumber}`}</p>
                     <h1 className="mt-1 text-2xl font-extrabold tracking-tight text-slate-950 sm:text-3xl">Waiter orders</h1>
-                    <p className="mt-1 text-sm text-slate-600">Review, update, move, and close orders for this table.</p>
+                    <p className="mt-1 text-sm text-slate-600">{allTables ? 'Review orders across tables. Open orders can be edited or moved; completed orders keep their payment QR.' : 'Review, update, move, and close orders for this table.'}</p>
                 </div>
                 <button type="button" onClick={() => void refresh(true)} disabled={refreshing} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm disabled:opacity-60">
                     <ArrowPathIcon className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
@@ -257,17 +266,21 @@ export function CaptainOrdersPanel({
             </div>
 
             {loading ? (
-                <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Loading orders for Table {table.tableNumber}…</div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Loading {allTables ? 'restaurant' : `Table ${table.tableNumber}`} orders…</div>
             ) : orders.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
                     <TableCellsIcon className="mx-auto h-9 w-9 text-slate-300" />
-                    <h2 className="mt-3 text-lg font-bold text-slate-900">No waiter orders for this table</h2>
-                    <p className="mt-1 text-sm text-slate-500">Orders sent from the waiter page will appear here automatically.</p>
+                    <h2 className="mt-3 text-lg font-bold text-slate-900">{allTables ? 'No orders across your tables' : 'No orders for this table'}</h2>
+                    <p className="mt-1 text-sm text-slate-500">{allTables ? 'Orders from every active dine-in table will appear here.' : 'Orders for this table will appear here automatically.'}</p>
                 </div>
             ) : (
                 <div className="space-y-4">
                     {orders.map((order) => {
                         const closed = order.status === 'completed' || order.status === 'cancelled';
+                        const orderTableId = tableIdOf(order);
+                        const orderTableNumber = typeof order.tableId === 'string'
+                            ? tables.find((candidate) => candidate._id === orderTableId)?.tableNumber || 'Unknown'
+                            : order.tableId?.tableNumber || 'Unknown';
                         const payable = orderAmount(order, restaurant);
                         const qrOpen = Object.prototype.hasOwnProperty.call(qrVisibility, order._id)
                             ? qrVisibility[order._id]
@@ -278,6 +291,7 @@ export function CaptainOrdersPanel({
                                     <div>
                                         <div className="flex flex-wrap items-center gap-2">
                                             <h2 className="text-base font-extrabold text-slate-950">Order #{order._id.slice(-6).toUpperCase()}</h2>
+                                            {allTables && <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-800">Table {orderTableNumber}</span>}
                                             <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold capitalize ${order.status === 'completed' ? 'bg-emerald-100 text-emerald-800' : order.status === 'cancelled' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'}`}>{order.status}</span>
                                             {order.orderChannel && <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-600">{order.orderChannel === 'waiter' ? 'Waiter' : 'Customer QR'}</span>}
                                             {order.paymentStatus === 'paid' && <span className="rounded-full bg-sky-100 px-2.5 py-1 text-[11px] font-bold text-sky-800">Paid{order.paymentMethod ? ` · ${order.paymentMethod.toUpperCase()}` : ''}</span>}
@@ -304,7 +318,7 @@ export function CaptainOrdersPanel({
                                         <div className="flex min-h-10 w-full gap-2 sm:ml-auto sm:w-auto">
                                             <select aria-label="Move order to table" value={transferTargets[order._id] || ''} onChange={(event) => setTransferTargets((current) => ({ ...current, [order._id]: event.target.value }))} className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 sm:w-40 sm:flex-none">
                                                 <option value="">Move to table…</option>
-                                                {tables.filter((candidate) => candidate._id !== table._id).map((candidate) => <option key={candidate._id} value={candidate._id}>Table {candidate.tableNumber}</option>)}
+                                                {tables.filter((candidate) => candidate._id !== orderTableId).map((candidate) => <option key={candidate._id} value={candidate._id}>Table {candidate.tableNumber}</option>)}
                                             </select>
                                             <button type="button" disabled={busyOrderId === order._id || !transferTargets[order._id]} onClick={() => void transferOrder(order)} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-slate-100 px-3 text-xs font-bold text-slate-700 disabled:opacity-40"><ArrowRightIcon className="h-4 w-4" /> Move</button>
                                         </div>

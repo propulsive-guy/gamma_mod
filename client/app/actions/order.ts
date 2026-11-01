@@ -461,6 +461,26 @@ export async function getCaptainTableOrders(captainKey: string, tableId: string)
     }
 }
 
+/** List recent orders across all active restaurant tables for the permanent captain page. */
+export async function getCaptainRestaurantOrders(captainKey: string) {
+    try {
+        await dbConnect();
+        const restaurantId = await captainRestaurantId(captainKey);
+        if (!restaurantId) return { success: false, error: 'This waiter link is no longer valid.', orders: [] };
+        const dineInTableIds = await Table.find({ restaurantId, isActive: true, isTakeaway: { $ne: true } }).distinct('_id');
+        if (dineInTableIds.length === 0) return { success: true, orders: [] };
+        const orders = await Order.find({
+            restaurantId,
+            tableId: { $in: dineInTableIds },
+        })
+            .select('items.menuItemId items.name items.price items.quantity total status paymentStatus paymentMethod orderType orderChannel checkout customerName customerPhone notes createdAt updatedAt')
+            .sort({ createdAt: -1 }).limit(200).populate('tableId', 'tableNumber').lean();
+        return { success: true, orders: JSON.parse(JSON.stringify(orders)) };
+    } catch (error) {
+        return { success: false, error: resultError('Get captain restaurant orders error:', error, 'Could not load restaurant orders.'), orders: [] };
+    }
+}
+
 /** Edit an unpaid waiter order, applying the ingredient stock difference in the same Mongo transaction. */
 export async function editCaptainOrder(captainKey: string, sourceTableId: string, orderId: string, linesInput: { menuItemId: string; quantity: number }[], notesInput?: string) {
     if (!mongoose.Types.ObjectId.isValid(sourceTableId) || !mongoose.Types.ObjectId.isValid(orderId) || !Array.isArray(linesInput) || linesInput.length < 1 || linesInput.length > 50) {

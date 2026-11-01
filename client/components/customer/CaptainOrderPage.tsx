@@ -22,7 +22,7 @@ export function CaptainOrderPage({
     menuItems: ComponentProps<typeof CustomerMenu>['menuItems'];
 }) {
     const [selectedTableId, setSelectedTableId] = useState(tables[0]?._id || '');
-    const [activeTab, setActiveTab] = useState<'order' | 'track'>('order');
+    const [activeTab, setActiveTab] = useState<'order' | 'track' | 'all'>('order');
     const selectedTable = tables.find((table) => table._id === selectedTableId);
 
     return (
@@ -48,8 +48,9 @@ export function CaptainOrderPage({
                 <>
                     <nav className="sticky top-[60px] z-40 border-b border-slate-200 bg-white px-4 py-1.5 shadow-sm sm:px-6" aria-label="Waiter actions">
                         <div className="mx-auto flex max-w-6xl gap-2">
-                            <button type="button" onClick={() => setActiveTab('order')} aria-pressed={activeTab === 'order'} className={`min-h-11 flex-1 rounded-xl px-4 text-sm font-bold ${activeTab === 'order' ? 'bg-emerald-700 text-white' : 'bg-slate-100 text-slate-700'}`}>Take order</button>
-                            <button type="button" onClick={() => setActiveTab('track')} aria-pressed={activeTab === 'track'} className={`min-h-11 flex-1 rounded-xl px-4 text-sm font-bold ${activeTab === 'track' ? 'bg-emerald-700 text-white' : 'bg-slate-100 text-slate-700'}`}>Track table orders</button>
+                            <button type="button" onClick={() => setActiveTab('order')} aria-pressed={activeTab === 'order'} className={`min-h-11 flex-1 rounded-xl px-2 text-xs font-bold sm:px-4 sm:text-sm ${activeTab === 'order' ? 'bg-emerald-700 text-white' : 'bg-slate-100 text-slate-700'}`}>Take order</button>
+                            <button type="button" onClick={() => setActiveTab('track')} aria-pressed={activeTab === 'track'} className={`min-h-11 flex-1 rounded-xl px-2 text-xs font-bold sm:px-4 sm:text-sm ${activeTab === 'track' ? 'bg-emerald-700 text-white' : 'bg-slate-100 text-slate-700'}`}>This table</button>
+                            <button type="button" onClick={() => setActiveTab('all')} aria-pressed={activeTab === 'all'} className={`min-h-11 flex-1 rounded-xl px-2 text-xs font-bold sm:px-4 sm:text-sm ${activeTab === 'all' ? 'bg-emerald-700 text-white' : 'bg-slate-100 text-slate-700'}`}>All orders</button>
                         </div>
                     </nav>
                     <div className={activeTab === 'order' ? '' : 'hidden'}>
@@ -69,6 +70,15 @@ export function CaptainOrderPage({
                         tables={tables}
                         menuItems={menuItems}
                         restaurant={restaurant}
+                    />}
+                    {activeTab === 'all' && <CaptainOrdersPanel
+                        key="orders-all-tables"
+                        captainKey={captainKey}
+                        table={selectedTable}
+                        tables={tables}
+                        menuItems={menuItems}
+                        restaurant={restaurant}
+                        allTables
                     />}
                 </>
             ) : (
