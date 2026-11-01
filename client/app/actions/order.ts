@@ -16,8 +16,10 @@ import {
     consumeKitchenLots,
     createKitchenLot,
     expireDueKitchenLots,
+    effectiveExpiryDays,
     seedLegacyKitchenLots,
 } from '../../../shared/kitchenStockLots';
+import { calculateCheckout } from '../../../server/lib/checkout';
 
 const roundQuantity = (value: number) => Math.round(value * 10000) / 10000;
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
@@ -290,6 +292,7 @@ export async function createOrder(data: any) {
                 restaurantId,
                 tableId,
                 orderType: table.isTakeaway ? 'takeaway' : 'dine-in',
+                orderChannel: data.orderChannel === 'waiter' ? 'waiter' : 'customer',
                 items: orderItems,
                 total: roundMoney(total),
                 checkout,
@@ -421,6 +424,300 @@ export async function getOrdersBySession(sessionId: string, tableId: string) {
         return { success: true, orders: JSON.parse(JSON.stringify(orders)) };
     } catch (error) {
         return { success: false, orders: [], error: resultError('Error fetching customer orders:', error, 'Failed to fetch orders.') };
+    }
+}
+
+async function captainRestaurantId(captainKey: string) {
+    const key = String(captainKey || '').trim();
+    if (mongoose.Types.ObjectId.isValid(key)) {
+        const restaurant = await Restaurant.findById(key).select('_id').lean();
+        return restaurant ? String(restaurant._id) : null;
+    }
+    if (!/^[a-f0-9]{64}$/i.test(key)) return null;
+    const restaurant = await Restaurant.findOne({ captainToken: key }).select('_id').lean();
+    return restaurant ? String(restaurant._id) : null;
+}
+
+function captainOrderResult(order: any) {
+    const plain = typeof order?.toObject === 'function' ? order.toObject() : order;
+    return JSON.parse(JSON.stringify(withoutInventoryDetails(plain)));
+}
+
+/** List recent table orders, including older orders created before order channels were recorded. */
+export async function getCaptainTableOrders(captainKey: string, tableId: string) {
+    try {
+        if (!mongoose.Types.ObjectId.isValid(tableId)) return { success: false, error: 'Choose a valid table.', orders: [] };
+        await dbConnect();
+        const restaurantId = await captainRestaurantId(captainKey);
+        if (!restaurantId) return { success: false, error: 'This waiter link is no longer valid.', orders: [] };
+        const table = await Table.findOne({ _id: tableId, restaurantId, isActive: true, isTakeaway: { $ne: true } }).select('_id').lean();
+        if (!table) return { success: false, error: 'This table is unavailable.', orders: [] };
+        const orders = await Order.find({ restaurantId, tableId })
+            .select('items.name items.price items.quantity total status paymentStatus paymentMethod orderType orderChannel checkout customerName customerPhone notes createdAt updatedAt')
+            .sort({ createdAt: -1 }).limit(60).populate('tableId', 'tableNumber').lean();
+        return { success: true, orders: JSON.parse(JSON.stringify(orders)) };
+    } catch (error) {
+        return { success: false, error: resultError('Get waiter table orders error:', error, 'Could not load table orders.'), orders: [] };
+    }
+}
+
+/** Edit an unpaid waiter order, applying the ingredient stock difference in the same Mongo transaction. */
+export async function editCaptainOrder(captainKey: string, sourceTableId: string, orderId: string, linesInput: { menuItemId: string; quantity: number }[], notesInput?: string) {
+    if (!mongoose.Types.ObjectId.isValid(sourceTableId) || !mongoose.Types.ObjectId.isValid(orderId) || !Array.isArray(linesInput) || linesInput.length < 1 || linesInput.length > 50) {
+        return { success: false, error: 'Add at least one valid menu item.' };
+    }
+    const lines = linesInput.map((line) => ({ menuItemId: String(line?.menuItemId || ''), quantity: Number(line?.quantity) }));
+    if (lines.some((line) => !mongoose.Types.ObjectId.isValid(line.menuItemId) || !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 99) ||
+        new Set(lines.map((line) => line.menuItemId)).size !== lines.length) {
+        return { success: false, error: 'Check the menu items and quantities, then try again.' };
+    }
+    const notes = typeof notesInput === 'string' ? notesInput.trim() : '';
+    if (notes.length > 500) return { success: false, error: 'Order notes must be 500 characters or fewer.' };
+
+    let session: mongoose.ClientSession | null = null;
+    let updatedOrder: any = null;
+    try {
+        await dbConnect();
+        const restaurantId = await captainRestaurantId(captainKey);
+        if (!restaurantId) return { success: false, error: 'This waiter link is no longer valid.' };
+        const activeSession = await mongoose.startSession();
+        session = activeSession;
+        await activeSession.withTransaction(async () => {
+            const restaurant = await Restaurant.findById(restaurantId)
+                .select('inventoryTrackingEnabled gstPercentage sgstPercentage')
+                .session(activeSession);
+            const order = await Order.findOne({ _id: orderId, restaurantId, tableId: sourceTableId })
+                .select('+inventoryUsage +inventoryDeducted +items.recipeSnapshot')
+                .session(activeSession);
+            if (!restaurant || !order) throw new Error('Waiter order not found. Refresh the table orders.');
+            if (order.paymentStatus === 'paid' || order.status === 'completed' || order.status === 'cancelled') {
+                throw new Error('Only open, unpaid orders can be edited.');
+            }
+
+            const table = await Table.findOne({ _id: order.tableId, restaurantId, isActive: true, isTakeaway: { $ne: true } }).session(activeSession);
+            if (!table) throw new Error('The order table is no longer available.');
+            const menuItems = await MenuItem.find({ _id: { $in: lines.map((line) => line.menuItemId) }, restaurantId, isAvailable: true }).session(activeSession);
+            const menuById = new Map(menuItems.map((item) => [String(item._id), item]));
+            const trackingEnabled = restaurant.inventoryTrackingEnabled !== false;
+            const required = new Map<string, { departmentId: any; inventoryItemId: any; quantity: number }>();
+            let subtotal = 0;
+            const nextItems = lines.map(({ menuItemId, quantity }) => {
+                const menuItem = menuById.get(menuItemId);
+                if (!menuItem) throw new Error('A selected dish is no longer available. Refresh the menu and try again.');
+                subtotal += Number(menuItem.price) * quantity;
+                for (const recipePart of trackingEnabled && menuItem.departmentId ? menuItem.recipe || [] : []) {
+                    const key = `${menuItem.departmentId}:${recipePart.inventoryItemId}`;
+                    const current = required.get(key);
+                    required.set(key, {
+                        departmentId: menuItem.departmentId,
+                        inventoryItemId: recipePart.inventoryItemId,
+                        quantity: roundQuantity((current?.quantity || 0) + Number(recipePart.quantity) * quantity),
+                    });
+                }
+                return {
+                    menuItemId: menuItem._id,
+                    name: menuItem.name,
+                    price: menuItem.price,
+                    quantity,
+                    dietaryType: menuItem.dietaryType || 'unknown',
+                    itemType: menuItem.itemType || 'food',
+                };
+            });
+            if (!Number.isFinite(subtotal) || subtotal > 10_000_000) throw new Error('The updated order total is outside the supported range.');
+
+            const requiredIds = [...new Set([...required.values()].map((part) => String(part.inventoryItemId)))];
+            const inventoryItems = requiredIds.length
+                ? await InventoryItem.find({ _id: { $in: requiredIds }, restaurantId }).select('name category unit costPerUnit expiryDays wasteBehavior isActive').session(activeSession)
+                : [];
+            const inventoryById = new Map(inventoryItems.map((item) => [String(item._id), item]));
+            for (const part of required.values()) {
+                const item = inventoryById.get(String(part.inventoryItemId));
+                if (!item || !item.isActive) throw new Error('A linked ingredient is unavailable. Update the recipe before editing this order.');
+            }
+
+            const nextUsage = trackingEnabled
+                ? [...required.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([, part]) => {
+                    const inventoryItem = inventoryById.get(String(part.inventoryItemId))!;
+                    return {
+                        inventoryItemId: inventoryItem._id,
+                        departmentId: part.departmentId,
+                        inventoryCategory: inventoryItem.category || 'Uncategorized',
+                        quantity: roundQuantity(part.quantity),
+                        unitCost: Number(inventoryItem.costPerUnit || 0),
+                    };
+                })
+                : [];
+            const nextItemsWithSnapshots = nextItems.map((line: any) => {
+                const menuItem = menuById.get(String(line.menuItemId));
+                const recipeSnapshot = trackingEnabled && menuItem?.departmentId
+                    ? (menuItem.recipe || []).map((part: any) => {
+                        const inventoryItem = inventoryById.get(String(part.inventoryItemId));
+                        return {
+                            inventoryItemId: part.inventoryItemId,
+                            quantity: roundQuantity(Number(part.quantity || 0)),
+                            inventoryCategory: inventoryItem?.category || 'Uncategorized',
+                            unitCost: Number(inventoryItem?.costPerUnit || 0),
+                            unit: inventoryItem?.unit || '',
+                        };
+                    })
+                    : [];
+                return { ...line, recipeSnapshot };
+            });
+
+            if (trackingEnabled) {
+                await seedLegacyKitchenLots({ Lot: KitchenStockLot, KitchenStock, InventoryItem }, restaurantId, activeSession);
+                await expireDueKitchenLots({ Lot: KitchenStockLot, KitchenStock, StockMovement, InventoryItem }, restaurantId, activeSession);
+                const reservedBefore = order.inventoryDeducted === false ? [] : (order.inventoryUsage || []);
+                const oldByKey = new Map(reservedBefore.map((part: any) => [`${part.departmentId}:${part.inventoryItemId}`, part]));
+                const nextByKey = new Map(nextUsage.map((part: any) => [`${part.departmentId}:${part.inventoryItemId}`, part]));
+                const keys = [...new Set([...oldByKey.keys(), ...nextByKey.keys()])].sort();
+                for (const key of keys) {
+                    const previous: any = oldByKey.get(key);
+                    const next: any = nextByKey.get(key);
+                    const difference = roundQuantity(Number(next?.quantity || 0) - Number(previous?.quantity || 0));
+                    if (Math.abs(difference) < 0.0001) continue;
+                    const part = next || previous;
+                    const inventoryItem = inventoryById.get(String(part.inventoryItemId)) || await InventoryItem.findOne({ _id: part.inventoryItemId, restaurantId }).select('name category unit costPerUnit expiryDays wasteBehavior').session(activeSession);
+                    if (difference > 0) {
+                        const before = await KitchenStock.findOneAndUpdate(
+                            { restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId, currentStock: { $gte: difference } },
+                            { $inc: { currentStock: -difference } }, { session: activeSession },
+                        );
+                        if (!before) throw new Error(`Not enough kitchen stock for ${inventoryItem?.name || 'an ingredient'}.`);
+                        await consumeKitchenLots(KitchenStockLot, { restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId }, difference, activeSession);
+                        await StockMovement.create([{
+                            restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId,
+                            inventoryCategory: inventoryItem?.category || part.inventoryCategory,
+                            orderId: order._id, type: 'usage', quantity: -difference,
+                            stockBefore: before.currentStock, stockAfter: roundQuantity(before.currentStock - difference),
+                            unitCost: inventoryItem?.costPerUnit ?? part.unitCost, note: `Added to waiter order ${order._id}`,
+                        }], { session: activeSession });
+                    } else {
+                        const returned = Math.abs(difference);
+                        const after = await KitchenStock.findOneAndUpdate(
+                            { restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId },
+                            { $inc: { currentStock: returned }, $setOnInsert: { restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId } },
+                            { session: activeSession, new: true, upsert: true, setDefaultsOnInsert: true },
+                        );
+                        await createKitchenLot(KitchenStockLot, {
+                            restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId,
+                            quantity: returned, expiryDays: effectiveExpiryDays(inventoryItem || {}), unitCost: inventoryItem?.costPerUnit ?? part.unitCost,
+                        }, activeSession);
+                        await StockMovement.create([{
+                            restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId,
+                            inventoryCategory: inventoryItem?.category || part.inventoryCategory,
+                            orderId: order._id, type: 'return', quantity: returned,
+                            stockBefore: roundQuantity(after.currentStock - returned), stockAfter: after.currentStock,
+                            unitCost: inventoryItem?.costPerUnit ?? part.unitCost, note: `Removed from waiter order ${order._id}`,
+                        }], { session: activeSession });
+                    }
+                }
+            }
+
+            const gstRate = Math.max(0, Number(restaurant.gstPercentage) || 0);
+            const sgstRate = Math.max(0, Number(restaurant.sgstPercentage) || 0);
+            const checkout = calculateCheckout(
+                roundMoney(subtotal),
+                order.checkout?.couponCode || '',
+                Number(order.checkout?.tipAmount || 0),
+                gstRate,
+                sgstRate,
+                0,
+            );
+            order.items = nextItemsWithSnapshots as any;
+            order.total = roundMoney(subtotal);
+            order.checkout = checkout as any;
+            order.notes = notes;
+            order.inventoryUsage = nextUsage as any;
+            order.inventoryDeducted = true;
+            await order.save({ session: activeSession });
+            await order.populate('tableId', 'tableNumber');
+            updatedOrder = withoutInventoryDetails(order.toObject());
+        });
+        revalidatePath('/dashboard/orders');
+        if (!updatedOrder) return { success: false, error: 'Could not update this order.' };
+        return { success: true, data: captainOrderResult(updatedOrder) };
+    } catch (error) {
+        return { success: false, error: resultError('Edit waiter order error:', error, 'Could not update this order.') };
+    } finally {
+        if (session) await session.endSession();
+    }
+}
+
+/** Move an unpaid waiter order to another active dine-in table in the same restaurant. */
+export async function transferCaptainOrder(captainKey: string, sourceTableId: string, orderId: string, targetTableId: string) {
+    try {
+        if (!mongoose.Types.ObjectId.isValid(sourceTableId) || !mongoose.Types.ObjectId.isValid(orderId) || !mongoose.Types.ObjectId.isValid(targetTableId)) {
+            return { success: false, error: 'Choose a valid order and destination table.' };
+        }
+        await dbConnect();
+        const restaurantId = await captainRestaurantId(captainKey);
+        if (!restaurantId) return { success: false, error: 'This waiter link is no longer valid.' };
+        const targetTable = await Table.findOne({ _id: targetTableId, restaurantId, isActive: true, isTakeaway: { $ne: true } }).select('_id').lean();
+        if (!targetTable) return { success: false, error: 'Choose an active dine-in table.' };
+        const order = await Order.findOneAndUpdate(
+            { _id: orderId, restaurantId, tableId: sourceTableId, status: { $ne: 'cancelled' }, paymentStatus: { $ne: 'paid' } },
+            { $set: { tableId: targetTableId } }, { new: true },
+        ).select('items.name items.price items.quantity total status paymentStatus paymentMethod orderType orderChannel checkout customerName customerPhone notes createdAt updatedAt')
+            .populate('tableId', 'tableNumber');
+        if (!order) return { success: false, error: 'This order cannot be transferred because it is closed, paid, or no longer available.' };
+        revalidatePath('/dashboard/orders');
+        return { success: true, data: captainOrderResult(order) };
+    } catch (error) {
+        return { success: false, error: resultError('Transfer waiter order error:', error, 'Could not transfer this order.') };
+    }
+}
+
+/** Complete an order from the waiter screen and ensure any not-yet-reserved recipe stock is deducted. */
+export async function completeCaptainOrder(captainKey: string, sourceTableId: string, orderId: string) {
+    let session: mongoose.ClientSession | null = null;
+    let updatedOrder: any = null;
+    try {
+        if (!mongoose.Types.ObjectId.isValid(sourceTableId) || !mongoose.Types.ObjectId.isValid(orderId)) return { success: false, error: 'Choose a valid order.' };
+        await dbConnect();
+        const restaurantId = await captainRestaurantId(captainKey);
+        if (!restaurantId) return { success: false, error: 'This waiter link is no longer valid.' };
+        const activeSession = await mongoose.startSession();
+        session = activeSession;
+        await activeSession.withTransaction(async () => {
+            const order = await Order.findOne({ _id: orderId, restaurantId, tableId: sourceTableId })
+                .select('+inventoryUsage +inventoryDeducted')
+                .session(activeSession);
+            if (!order || order.status === 'cancelled') throw new Error('This order is not open. Refresh the table orders.');
+            if (order.paymentStatus === 'paid') throw new Error('This order is already paid.');
+            const restaurant = await Restaurant.findById(restaurantId).select('inventoryTrackingEnabled').session(activeSession);
+            if (restaurant?.inventoryTrackingEnabled !== false && order.inventoryDeducted === false && order.inventoryUsage?.length) {
+                await seedLegacyKitchenLots({ Lot: KitchenStockLot, KitchenStock, InventoryItem }, restaurantId, activeSession);
+                await expireDueKitchenLots({ Lot: KitchenStockLot, KitchenStock, StockMovement, InventoryItem }, restaurantId, activeSession);
+                for (const part of [...order.inventoryUsage].sort((left: any, right: any) => String(left.inventoryItemId).localeCompare(String(right.inventoryItemId)))) {
+                    const quantity = roundQuantity(Number(part.quantity));
+                    const before = await KitchenStock.findOneAndUpdate(
+                        { restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId, currentStock: { $gte: quantity } },
+                        { $inc: { currentStock: -quantity } }, { session: activeSession },
+                    );
+                    if (!before) throw new Error('Not enough kitchen stock to complete this order.');
+                    await consumeKitchenLots(KitchenStockLot, { restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId }, quantity, activeSession);
+                    await StockMovement.create([{
+                        restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId,
+                        inventoryCategory: part.inventoryCategory, orderId: order._id, type: 'usage', quantity: -quantity,
+                        stockBefore: before.currentStock, stockAfter: roundQuantity(before.currentStock - quantity),
+                        unitCost: part.unitCost, note: `Completed waiter order ${order._id}`,
+                    }], { session: activeSession });
+                }
+                order.inventoryDeducted = true;
+            }
+            order.status = 'completed';
+            await order.save({ session: activeSession });
+            await order.populate('tableId', 'tableNumber');
+            updatedOrder = withoutInventoryDetails(order.toObject());
+        });
+        revalidatePath('/dashboard/orders');
+        if (!updatedOrder) return { success: false, error: 'Could not complete this order.' };
+        return { success: true, data: captainOrderResult(updatedOrder) };
+    } catch (error) {
+        return { success: false, error: resultError('Complete waiter order error:', error, 'Could not complete this order.') };
+    } finally {
+        if (session) await session.endSession();
     }
 }
 

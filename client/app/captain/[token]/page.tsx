@@ -1,7 +1,6 @@
 import mongoose from 'mongoose';
 import { notFound } from 'next/navigation';
 import { CaptainOrderPage } from '@/components/customer/CaptainOrderPage';
-import { CustomerMenu } from '@/components/customer/CustomerMenu';
 import dbConnect from '@/lib/db';
 import MenuItem from '@/models/MenuItem';
 import Restaurant from '@/models/Restaurant';
@@ -17,7 +16,7 @@ export default async function CaptainTablePage(props: { params: Promise<{ token:
     if (!isRestaurantId && !isLegacyToken) notFound();
 
     await dbConnect();
-    const restaurantFields = '_id name description logoUrl coverImageUrl themeColor logoAccentColor accentSource fontFamily colorScheme';
+    const restaurantFields = '_id name description logoUrl coverImageUrl themeColor logoAccentColor accentSource fontFamily colorScheme upiId upiPayeeName merchantCode gstNumber fssaiNumber gstPercentage sgstPercentage address phone';
     let captainRestaurant = isRestaurantId
         ? await Restaurant.findById(token).select(restaurantFields).lean()
         : null;
@@ -49,10 +48,20 @@ export default async function CaptainTablePage(props: { params: Promise<{ token:
             accentSource: captainRestaurant.accentSource,
             fontFamily: captainRestaurant.fontFamily,
             colorScheme: captainRestaurant.colorScheme,
+            upiId: captainRestaurant.upiId,
+            upiPayeeName: captainRestaurant.upiPayeeName,
+            merchantCode: captainRestaurant.merchantCode,
+            gstNumber: captainRestaurant.gstNumber,
+            fssaiNumber: captainRestaurant.fssaiNumber,
+            gstPercentage: captainRestaurant.gstPercentage,
+            sgstPercentage: captainRestaurant.sgstPercentage,
+            address: captainRestaurant.address,
+            phone: captainRestaurant.phone,
         };
 
         return <CaptainOrderPage
             restaurant={JSON.parse(JSON.stringify(restaurant))}
+            captainKey={token}
             tables={JSON.parse(JSON.stringify(tables))}
             menuItems={JSON.parse(JSON.stringify(menuItems))}
         />;
@@ -64,7 +73,7 @@ export default async function CaptainTablePage(props: { params: Promise<{ token:
 
     const [restaurant, menuItems] = await Promise.all([
         Restaurant.findById(table.restaurantId)
-            .select('name description logoUrl coverImageUrl themeColor logoAccentColor accentSource fontFamily colorScheme')
+            .select('name description logoUrl coverImageUrl themeColor logoAccentColor accentSource fontFamily colorScheme upiId upiPayeeName merchantCode gstNumber fssaiNumber gstPercentage sgstPercentage address phone')
             .lean(),
         MenuItem.find({ restaurantId: table.restaurantId, isAvailable: true })
             .select('name description price category imageUrl aestheticImageUrl')
@@ -74,10 +83,11 @@ export default async function CaptainTablePage(props: { params: Promise<{ token:
 
     if (!restaurant) notFound();
 
-    return <CustomerMenu
-        restaurant={JSON.parse(JSON.stringify(restaurant))}
-        table={JSON.parse(JSON.stringify(table))}
+    const restaurantInfo = JSON.parse(JSON.stringify(restaurant));
+    return <CaptainOrderPage
+        restaurant={restaurantInfo}
+        captainKey={String(table.restaurantId)}
+        tables={[JSON.parse(JSON.stringify(table))]}
         menuItems={JSON.parse(JSON.stringify(menuItems))}
-        captainMode
     />;
 }

@@ -298,12 +298,12 @@ export function OrdersList({ initialOrders, restaurant }: { initialOrders: Order
                             <div className="px-5 pb-4 flex items-center gap-2 flex-wrap">
                                 <button
                                     onClick={() => handlePrintBill(order)}
-                                    className="p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+                                    className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100"
                                     title="Print Bill"
                                 >
-                                    <PrinterIcon className="w-4 h-4" />
+                                    <PrinterIcon className="w-4 h-4" /> Print Bill
                                 </button>
-                                <button type="button" onClick={() => setKotOrder(order)} className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100" title="View and print kitchen order ticket">KOT</button>
+                                <button type="button" onClick={() => setKotOrder(order)} className="inline-flex min-h-9 items-center rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100" title="View and print kitchen order ticket">Print KOT</button>
 
                                 {isUnpaidOrder(order) && (
                                     <button

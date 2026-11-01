@@ -38,6 +38,7 @@ export interface IOrder extends Document {
     restaurantId: mongoose.Types.ObjectId;
     tableId: mongoose.Types.ObjectId;
     orderType: 'dine-in' | 'takeaway';
+    orderChannel?: 'customer' | 'waiter';
     items: IOrderItem[];
     inventoryUsage: { inventoryItemId: mongoose.Types.ObjectId; departmentId?: mongoose.Types.ObjectId; inventoryCategory?: string; quantity: number; unitCost: number }[];
     inventoryRestored: boolean;
@@ -117,6 +118,12 @@ const orderSchema = new Schema<IOrder>(
             type: String,
             enum: ['dine-in', 'takeaway'],
             default: 'dine-in',
+        },
+        orderChannel: {
+            type: String,
+            enum: ['customer', 'waiter'],
+            default: 'customer',
+            index: true,
         },
         items: {
             type: [orderItemSchema],

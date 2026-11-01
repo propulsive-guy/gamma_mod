@@ -36,6 +36,15 @@ interface Restaurant {
     colorScheme?: string;
     enableAestheticDownloads?: boolean;
     packagingCharge?: number;
+    upiId?: string;
+    upiPayeeName?: string;
+    merchantCode?: string;
+    gstNumber?: string;
+    fssaiNumber?: string;
+    gstPercentage?: number;
+    sgstPercentage?: number;
+    address?: string;
+    phone?: string;
 }
 
 interface Table {
@@ -53,11 +62,13 @@ export function CustomerMenu({
     table,
     menuItems,
     captainMode = false,
+    onCaptainOrderCreated,
 }: {
     restaurant: Restaurant;
     table: Table;
     menuItems: MenuItem[];
     captainMode?: boolean;
+    onCaptainOrderCreated?: () => void;
 }) {
     const router = useRouter();
     const [cart, setCart] = useState<CartItem[]>([]);
@@ -196,6 +207,7 @@ export function CustomerMenu({
                 tableId: table._id,
                 restaurantId: restaurant._id,
                 sessionId: currentVisit.sessionId,
+                orderChannel: captainMode ? 'waiter' : 'customer',
                 items: cart.map((item) => ({
                     menuItemId: item._id,
                     name: item.name,
@@ -208,14 +220,12 @@ export function CustomerMenu({
             });
 
             if (result.success) {
-                toast.success(captainMode
-                    ? `Order saved for Table ${table.tableNumber}. Its KOT is available in Orders.`
-                    : 'Order placed successfully!');
+                toast.success(captainMode ? `Order saved for Table ${table.tableNumber}.` : 'Order placed successfully!');
                 setCart([]);
                 setShowCart(false);
                 if (!captainMode) {
                     router.push(`/table/${restaurant._id}/${table._id}/order-status?visit=${currentVisit.visitId}&pay=${encodeURIComponent(result.data._id)}`);
-                }
+                } else onCaptainOrderCreated?.();
             } else {
                 toast.error(result.error || 'Failed to place order');
             }
@@ -231,7 +241,7 @@ export function CustomerMenu({
             <link rel="stylesheet" href={fontUrlMap[font] || fontUrlMap.inter} />
 
             <div className="min-h-[100dvh] overflow-x-hidden pb-32 transition-colors duration-300" style={{ backgroundColor: t.bg, fontFamily, color: t.text }}>
-                <header className={`sticky ${captainMode ? 'top-[60px]' : 'top-0'} z-40 border-b backdrop-blur-2xl`} style={{ backgroundColor: t.headerBg, borderColor: t.border }}>
+                <header className={`sticky ${captainMode ? 'top-[116px]' : 'top-0'} z-40 border-b backdrop-blur-2xl`} style={{ backgroundColor: t.headerBg, borderColor: t.border }}>
                     <div className="mx-auto flex h-[68px] max-w-6xl items-center justify-between gap-3 px-4 sm:px-6">
                         <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
                             {restaurant.logoUrl ? (
@@ -262,7 +272,7 @@ export function CustomerMenu({
                             <div className="max-w-2xl pb-1">
                                 <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/75">{table.isTakeaway ? 'Your favourites, ready to go' : 'A meal worth slowing down for'}</p>
                                 <h2 className="mt-3 max-w-xl text-[clamp(2.25rem,8vw,5rem)] font-semibold leading-[1.02] tracking-tight">Welcome to<br /><span className="font-serif italic">{restaurant.name}</span></h2>
-                                <p className="mt-4 max-w-lg text-sm leading-relaxed text-white/85 sm:text-base">{captainMode ? `Place an order for Table ${table.tableNumber}. The bill opens as soon as the order is sent.` : restaurant.description || (table.isTakeaway ? 'Explore the menu and place your order for pickup.' : 'Your table is ready. Explore the menu, find something lovely, and let us take care of the rest.')}</p>
+                                <p className="mt-4 max-w-lg text-sm leading-relaxed text-white/85 sm:text-base">{captainMode ? `Place an order for Table ${table.tableNumber}. Track it and show its payment QR from Track table orders.` : restaurant.description || (table.isTakeaway ? 'Explore the menu and place your order for pickup.' : 'Your table is ready. Explore the menu, find something lovely, and let us take care of the rest.')}</p>
                                 <a href="#menu" className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-bold text-zinc-900 transition active:scale-95">Explore the menu <ArrowRightIcon className="h-4 w-4" /></a>
                             </div>
                         </div>

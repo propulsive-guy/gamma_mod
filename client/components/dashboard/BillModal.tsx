@@ -105,7 +105,7 @@ export default function BillModal({ isOpen, onClose, order, restaurant }: BillMo
 
                                         <div className="flex justify-between text-xs text-gray-500 mb-4 border-b border-gray-100 pb-4">
                                             <div className="text-left">
-                                                <p>Date: {new Date().toLocaleDateString()}</p>
+                                                <p>Date: {new Date(order.createdAt || Date.now()).toLocaleDateString('en-IN')}</p>
                                                 <p>Order #: {order._id.slice(-6).toUpperCase()}</p>
                                             </div>
                                             <div className="text-right">
