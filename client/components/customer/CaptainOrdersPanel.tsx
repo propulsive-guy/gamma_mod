@@ -258,7 +258,7 @@ export function CaptainOrdersPanel({
                 <div>
                     <p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-700">{allTables ? 'All tables' : `Table ${table.tableNumber}`}</p>
                     <h1 className="mt-1 text-2xl font-extrabold tracking-tight text-slate-950 sm:text-3xl">Waiter orders</h1>
-                    <p className="mt-1 text-sm text-slate-600">{allTables ? 'Review orders across tables. Open orders can be edited or moved; completed orders keep their payment QR.' : 'Review, update, move, and close orders for this table.'}</p>
+                    <p className="mt-1 text-sm text-slate-600">{allTables ? 'Review orders across tables. Any unpaid order can be edited or moved, including completed orders.' : 'Edit or move any unpaid order for this table, including orders placed by customers.'}</p>
                 </div>
                 <button type="button" onClick={() => void refresh(true)} disabled={refreshing} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm disabled:opacity-60">
                     <ArrowPathIcon className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
@@ -276,7 +276,8 @@ export function CaptainOrdersPanel({
             ) : (
                 <div className="space-y-4">
                     {orders.map((order) => {
-                        const closed = order.status === 'completed' || order.status === 'cancelled';
+                        const cancelled = order.status === 'cancelled';
+                        const canManageOrder = !cancelled && order.paymentStatus !== 'paid';
                         const orderTableId = tableIdOf(order);
                         const orderTableNumber = typeof order.tableId === 'string'
                             ? tables.find((candidate) => candidate._id === orderTableId)?.tableNumber || 'Unknown'
@@ -312,9 +313,9 @@ export function CaptainOrdersPanel({
                                 </div>
 
                                 <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 px-4 py-3 sm:px-5">
-                                    {!closed && order.paymentStatus !== 'paid' && <button type="button" onClick={() => openEditor(order)} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-700 hover:bg-slate-50"><PencilSquareIcon className="h-4 w-4" /> Edit order</button>}
+                                    {canManageOrder && <button type="button" onClick={() => openEditor(order)} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-700 hover:bg-slate-50"><PencilSquareIcon className="h-4 w-4" /> Edit order</button>}
                                     <button type="button" onClick={() => openBill(order)} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-700 hover:bg-slate-50"><PrinterIcon className="h-4 w-4" /> Print bill</button>
-                                    {!closed && order.paymentStatus !== 'paid' && (
+                                    {canManageOrder && (
                                         <div className="flex min-h-10 w-full gap-2 sm:ml-auto sm:w-auto">
                                             <select aria-label="Move order to table" value={transferTargets[order._id] || ''} onChange={(event) => setTransferTargets((current) => ({ ...current, [order._id]: event.target.value }))} className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 sm:w-40 sm:flex-none">
                                                 <option value="">Move to table…</option>
@@ -323,8 +324,8 @@ export function CaptainOrdersPanel({
                                             <button type="button" disabled={busyOrderId === order._id || !transferTargets[order._id]} onClick={() => void transferOrder(order)} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-slate-100 px-3 text-xs font-bold text-slate-700 disabled:opacity-40"><ArrowRightIcon className="h-4 w-4" /> Move</button>
                                         </div>
                                     )}
-                                    {!closed && order.paymentStatus !== 'paid' && order.status !== 'served' && <button type="button" disabled={busyOrderId === order._id} onClick={() => void markOrderServed(order)} className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-violet-700 px-4 text-xs font-bold text-white hover:bg-violet-800 disabled:opacity-60 sm:ml-auto sm:w-auto"><CheckCircleIcon className="h-4 w-4" /> {busyOrderId === order._id ? 'Saving…' : 'Mark as served'}</button>}
-                                    {!closed && order.paymentStatus !== 'paid' && order.status === 'served' && <button type="button" disabled={busyOrderId === order._id} onClick={() => void completeOrder(order)} className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-700 px-4 text-xs font-bold text-white hover:bg-emerald-800 disabled:opacity-60 sm:ml-auto sm:w-auto"><CheckCircleIcon className="h-4 w-4" /> {busyOrderId === order._id ? 'Completing…' : 'Complete order'}</button>}
+                                    {canManageOrder && order.status !== 'completed' && order.status !== 'served' && <button type="button" disabled={busyOrderId === order._id} onClick={() => void markOrderServed(order)} className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-violet-700 px-4 text-xs font-bold text-white hover:bg-violet-800 disabled:opacity-60 sm:ml-auto sm:w-auto"><CheckCircleIcon className="h-4 w-4" /> {busyOrderId === order._id ? 'Saving…' : 'Mark as served'}</button>}
+                                    {canManageOrder && order.status === 'served' && <button type="button" disabled={busyOrderId === order._id} onClick={() => void completeOrder(order)} className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-700 px-4 text-xs font-bold text-white hover:bg-emerald-800 disabled:opacity-60 sm:ml-auto sm:w-auto"><CheckCircleIcon className="h-4 w-4" /> {busyOrderId === order._id ? 'Completing…' : 'Complete order'}</button>}
                                     {order.status === 'completed' && <button type="button" onClick={() => setQrVisibility((current) => ({ ...current, [order._id]: !qrOpen }))} aria-expanded={qrOpen} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-xs font-bold text-emerald-800 hover:bg-emerald-100">{qrOpen ? 'Close QR' : order.paymentStatus === 'paid' ? 'View payment QR' : 'Show payment QR'}</button>}
                                     {order.status === 'completed' && order.paymentStatus !== 'paid' && qrOpen && <button type="button" disabled={busyOrderId === order._id} onClick={() => void recordPaymentReceived(order)} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-sky-700 px-3 text-xs font-bold text-white hover:bg-sky-800 disabled:opacity-60">{busyOrderId === order._id ? 'Saving…' : 'Payment received'}</button>}
                                 </div>

@@ -510,8 +510,8 @@ export async function editCaptainOrder(captainKey: string, sourceTableId: string
                 .select('+inventoryUsage +inventoryDeducted +items.recipeSnapshot')
                 .session(activeSession);
             if (!restaurant || !order) throw new Error('Waiter order not found. Refresh the table orders.');
-            if (order.paymentStatus === 'paid' || order.status === 'completed' || order.status === 'cancelled') {
-                throw new Error('Only open, unpaid orders can be edited.');
+            if (order.paymentStatus === 'paid' || order.status === 'cancelled') {
+                throw new Error('Paid or cancelled orders cannot be edited.');
             }
 
             const table = await Table.findOne({ _id: order.tableId, restaurantId, isActive: true, isTakeaway: { $ne: true } }).session(activeSession);
