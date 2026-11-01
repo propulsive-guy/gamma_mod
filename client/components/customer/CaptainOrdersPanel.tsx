@@ -110,7 +110,7 @@ export function CaptainOrdersPanel({
     const [editingOrder, setEditingOrder] = useState<Order | null>(null);
     const [draftLines, setDraftLines] = useState<DraftLine[]>([]);
     const [draftNotes, setDraftNotes] = useState('');
-    const [newMenuItemId, setNewMenuItemId] = useState('');
+    const [menuSearch, setMenuSearch] = useState('');
     const [savingEdit, setSavingEdit] = useState(false);
     const [billOrder, setBillOrder] = useState<Order | null>(null);
     const [qrVisibility, setQrVisibility] = useState<Record<string, boolean>>({});
@@ -144,6 +144,13 @@ export function CaptainOrdersPanel({
         () => [...tables].sort((left, right) => tableNumberCollator.compare(left.tableNumber, right.tableNumber)),
         [tables],
     );
+    const matchingMenuItems = useMemo(() => {
+        const query = menuSearch.trim().toLocaleLowerCase();
+        if (!query) return [];
+        return editableMenu
+            .filter((item) => `${item.name} ${item.category}`.toLocaleLowerCase().includes(query))
+            .slice(0, 8);
+    }, [editableMenu, menuSearch]);
 
     const openEditor = (order: Order) => {
         setEditingOrder(order);
@@ -152,7 +159,7 @@ export function CaptainOrdersPanel({
             return { menuItemId: String(item.menuItemId || matchingMenuItem?._id || ''), quantity: item.quantity };
         }));
         setDraftNotes(order.notes || '');
-        setNewMenuItemId('');
+        setMenuSearch('');
     };
 
     const changeQuantity = (index: number, quantity: number) => {
@@ -161,14 +168,13 @@ export function CaptainOrdersPanel({
             : current.map((line, lineIndex) => lineIndex === index ? { ...line, quantity: Math.min(99, quantity) } : line));
     };
 
-    const addDraftItem = () => {
-        if (!newMenuItemId) return;
+    const addDraftItem = (menuItemId: string) => {
         setDraftLines((current) => {
-            const existing = current.findIndex((line) => line.menuItemId === newMenuItemId);
+            const existing = current.findIndex((line) => line.menuItemId === menuItemId);
             if (existing >= 0) return current.map((line, index) => index === existing ? { ...line, quantity: Math.min(99, line.quantity + 1) } : line);
-            return [...current, { menuItemId: newMenuItemId, quantity: 1 }];
+            return [...current, { menuItemId, quantity: 1 }];
         });
-        setNewMenuItemId('');
+        setMenuSearch('');
     };
 
     const saveEdit = async () => {
@@ -366,12 +372,37 @@ export function CaptainOrdersPanel({
                                 );
                             })}
                         </div>
-                        <div className="mt-4 flex gap-2">
-                            <select aria-label="Add a menu item" value={newMenuItemId} onChange={(event) => setNewMenuItemId(event.target.value)} className="min-h-11 min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700">
-                                <option value="">Add a dish…</option>
-                                {editableMenu.map((item) => <option key={item._id} value={item._id}>{item.name} · {formatCurrency(item.price)}</option>)}
-                            </select>
-                            <button type="button" onClick={addDraftItem} disabled={!newMenuItemId} className="min-h-11 rounded-xl bg-slate-900 px-4 text-sm font-bold text-white disabled:opacity-40">Add item</button>
+                        <div className="mt-4">
+                            <label htmlFor="captain-menu-search" className="block text-sm font-bold text-slate-700">Add a dish</label>
+                            <input
+                                id="captain-menu-search"
+                                type="search"
+                                value={menuSearch}
+                                onChange={(event) => setMenuSearch(event.target.value)}
+                                autoComplete="off"
+                                placeholder="Search menu items or categories…"
+                                className="mt-2 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                            />
+                            {menuSearch.trim() && (
+                                <div className="mt-2 max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-sm" role="listbox" aria-label="Matching menu items">
+                                    {matchingMenuItems.length ? matchingMenuItems.map((item) => (
+                                        <button
+                                            key={item._id}
+                                            type="button"
+                                            role="option"
+                                            aria-selected="false"
+                                            onClick={() => addDraftItem(item._id)}
+                                            className="flex min-h-12 w-full items-center justify-between gap-3 border-b border-slate-100 px-3 py-2 text-left last:border-b-0 hover:bg-emerald-50"
+                                        >
+                                            <span className="min-w-0">
+                                                <span className="block truncate text-sm font-semibold text-slate-900">{item.name}</span>
+                                                <span className="block text-xs text-slate-500">{item.category}</span>
+                                            </span>
+                                            <span className="shrink-0 text-sm font-bold text-slate-700">{formatCurrency(item.price)} · Add</span>
+                                        </button>
+                                    )) : <p className="px-3 py-4 text-sm text-slate-500">No matching available dishes.</p>}
+                                </div>
+                            )}
                         </div>
                         <label className="mt-4 block text-sm font-bold text-slate-700">Kitchen note
                             <textarea value={draftNotes} onChange={(event) => setDraftNotes(event.target.value)} maxLength={500} rows={3} className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-normal text-slate-800 outline-none focus:border-emerald-500" placeholder="Optional instructions" />
