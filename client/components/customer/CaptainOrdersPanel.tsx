@@ -55,6 +55,7 @@ interface Restaurant {
 type DraftLine = { menuItemId: string; quantity: number };
 
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+const tableNumberCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 /** Rebuild the captain bill from the restaurant profile rates, preserving any saved discount or tip. */
 const profileBasedCheckout = (order: Order, restaurant: Restaurant) => {
@@ -139,6 +140,10 @@ export function CaptainOrdersPanel({
     }, [refresh]);
 
     const editableMenu = useMemo(() => menuItems.filter((item) => Number.isFinite(item.price)), [menuItems]);
+    const orderedTables = useMemo(
+        () => [...tables].sort((left, right) => tableNumberCollator.compare(left.tableNumber, right.tableNumber)),
+        [tables],
+    );
 
     const openEditor = (order: Order) => {
         setEditingOrder(order);
@@ -319,7 +324,7 @@ export function CaptainOrdersPanel({
                                         <div className="flex min-h-10 w-full gap-2 sm:ml-auto sm:w-auto">
                                             <select aria-label="Move order to table" value={transferTargets[order._id] || ''} onChange={(event) => setTransferTargets((current) => ({ ...current, [order._id]: event.target.value }))} className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 sm:w-40 sm:flex-none">
                                                 <option value="">Move to table…</option>
-                                                {tables.filter((candidate) => candidate._id !== orderTableId).map((candidate) => <option key={candidate._id} value={candidate._id}>Table {candidate.tableNumber}</option>)}
+                                                {orderedTables.filter((candidate) => candidate._id !== orderTableId).map((candidate) => <option key={candidate._id} value={candidate._id}>Table {candidate.tableNumber}</option>)}
                                             </select>
                                             <button type="button" disabled={busyOrderId === order._id || !transferTargets[order._id]} onClick={() => void transferOrder(order)} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-slate-100 px-3 text-xs font-bold text-slate-700 disabled:opacity-40"><ArrowRightIcon className="h-4 w-4" /> Move</button>
                                         </div>

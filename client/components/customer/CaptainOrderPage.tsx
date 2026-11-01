@@ -4,6 +4,8 @@ import { useState, type ComponentProps } from 'react';
 import { CustomerMenu } from '@/components/customer/CustomerMenu';
 import { CaptainOrdersPanel } from '@/components/customer/CaptainOrdersPanel';
 
+const tableNumberCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
 interface CaptainTable {
     _id: string;
     tableNumber: string;
@@ -23,7 +25,8 @@ export function CaptainOrderPage({
 }) {
     const [selectedTableId, setSelectedTableId] = useState(tables[0]?._id || '');
     const [activeTab, setActiveTab] = useState<'order' | 'track' | 'all'>('order');
-    const selectedTable = tables.find((table) => table._id === selectedTableId);
+    const orderedTables = [...tables].sort((left, right) => tableNumberCollator.compare(left.tableNumber, right.tableNumber));
+    const selectedTable = orderedTables.find((table) => table._id === selectedTableId);
 
     return (
         <>
@@ -37,7 +40,7 @@ export function CaptainOrderPage({
                             onChange={(event) => setSelectedTableId(event.target.value)}
                             className="min-h-11 min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-900 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200 sm:max-w-xs"
                         >
-                            {tables.map((table) => <option key={table._id} value={table._id}>Table {table.tableNumber}</option>)}
+                            {orderedTables.map((table) => <option key={table._id} value={table._id}>Table {table.tableNumber}</option>)}
                         </select>
                     ) : (
                         <p className="text-sm text-slate-500">Add an active dine-in table to take orders.</p>
