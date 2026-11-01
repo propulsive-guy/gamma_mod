@@ -46,6 +46,7 @@ interface Restaurant {
     fssaiNumber?: string;
     gstPercentage?: number;
     sgstPercentage?: number;
+    packagingCharge?: number;
     upiId?: string;
     upiPayeeName?: string;
     merchantCode?: string;
@@ -53,7 +54,36 @@ interface Restaurant {
 
 type DraftLine = { menuItemId: string; quantity: number };
 
-const orderAmount = (order: Order) => Number(order.checkout?.payableAmount ?? order.total);
+const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+
+/** Rebuild the captain bill from the restaurant profile rates, preserving any saved discount or tip. */
+const profileBasedCheckout = (order: Order, restaurant: Restaurant) => {
+    const savedCheckout = order.checkout || {};
+    const subtotal = Math.max(0, roundMoney(Number(order.total) || 0));
+    const discountAmount = Math.min(subtotal, Math.max(0, Number(savedCheckout.discountAmount) || 0));
+    const taxableSubtotal = roundMoney(subtotal - discountAmount);
+    const gstRate = Math.max(0, Number(restaurant.gstPercentage ?? savedCheckout.gstRate ?? 0) || 0);
+    const sgstRate = Math.max(0, Number(restaurant.sgstPercentage ?? savedCheckout.sgstRate ?? 0) || 0);
+    const gstAmount = roundMoney(taxableSubtotal * gstRate / 100);
+    const sgstAmount = roundMoney(taxableSubtotal * sgstRate / 100);
+    const packagingCharge = Math.max(0, Number(savedCheckout.packagingCharge ?? (order.orderType === 'takeaway' ? restaurant.packagingCharge : 0)) || 0);
+    const tipAmount = Math.max(0, Number(savedCheckout.tipAmount) || 0);
+
+    return {
+        ...savedCheckout,
+        couponCode: savedCheckout.couponCode || '',
+        discountAmount: roundMoney(discountAmount),
+        tipAmount: roundMoney(tipAmount),
+        packagingCharge: roundMoney(packagingCharge),
+        gstRate,
+        sgstRate,
+        gstAmount,
+        sgstAmount,
+        payableAmount: roundMoney(taxableSubtotal + gstAmount + sgstAmount + packagingCharge + tipAmount),
+    };
+};
+
+const orderAmount = (order: Order, restaurant: Restaurant) => profileBasedCheckout(order, restaurant).payableAmount;
 const tableIdOf = (order: Order) => typeof order.tableId === 'string' ? order.tableId : order.tableId?._id || '';
 
 export function CaptainOrdersPanel({
@@ -209,6 +239,10 @@ export function CaptainOrdersPanel({
         }
     };
 
+    const openBill = (order: Order) => {
+        setBillOrder({ ...order, checkout: profileBasedCheckout(order, restaurant) });
+    };
+
     return (
         <section className="mx-auto min-h-[70vh] max-w-6xl space-y-4 bg-slate-50 px-4 py-5 sm:px-6 sm:py-7">
             <div className="flex flex-wrap items-end justify-between gap-3">
@@ -234,7 +268,7 @@ export function CaptainOrdersPanel({
                 <div className="space-y-4">
                     {orders.map((order) => {
                         const closed = order.status === 'completed' || order.status === 'cancelled';
-                        const payable = orderAmount(order);
+                        const payable = orderAmount(order, restaurant);
                         const qrOpen = Object.prototype.hasOwnProperty.call(qrVisibility, order._id)
                             ? qrVisibility[order._id]
                             : order.status === 'completed' && order.paymentStatus !== 'paid';
@@ -265,7 +299,7 @@ export function CaptainOrdersPanel({
 
                                 <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 px-4 py-3 sm:px-5">
                                     {!closed && order.paymentStatus !== 'paid' && <button type="button" onClick={() => openEditor(order)} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-700 hover:bg-slate-50"><PencilSquareIcon className="h-4 w-4" /> Edit order</button>}
-                                    <button type="button" onClick={() => setBillOrder(order)} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-700 hover:bg-slate-50"><PrinterIcon className="h-4 w-4" /> Print bill</button>
+                                    <button type="button" onClick={() => openBill(order)} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-700 hover:bg-slate-50"><PrinterIcon className="h-4 w-4" /> Print bill</button>
                                     {!closed && order.paymentStatus !== 'paid' && (
                                         <div className="flex min-h-10 w-full gap-2 sm:ml-auto sm:w-auto">
                                             <select aria-label="Move order to table" value={transferTargets[order._id] || ''} onChange={(event) => setTransferTargets((current) => ({ ...current, [order._id]: event.target.value }))} className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 sm:w-40 sm:flex-none">
