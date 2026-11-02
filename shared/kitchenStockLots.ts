@@ -55,6 +55,56 @@ export async function consumeKitchenLots(Lot: any, filter: {
     // Older kitchen balances may predate lot tracking. The aggregate stock remains authoritative for them.
 }
 
+/** Consume FIFO lots for several ingredients with one read and one bulk write. */
+export async function consumeKitchenLotsBatch(Lot: any, entries: {
+    restaurantId: any; departmentId: any; inventoryItemId: any; quantity: number;
+}[], session?: mongoose.ClientSession) {
+    const requested = entries
+        .map((entry) => ({ ...entry, quantity: round(entry.quantity) }))
+        .filter((entry) => entry.quantity > 0);
+    if (!requested.length) return;
+
+    const restaurantId = requested[0].restaurantId;
+    const lots = await Lot.find({
+        restaurantId,
+        remainingQuantity: { $gt: 0 },
+        $or: requested.map(({ departmentId, inventoryItemId }) => ({ departmentId, inventoryItemId })),
+    }).sort({ issuedAt: 1, _id: 1 }).session(session || null).lean();
+    const lotsByStockKey = new Map<string, any[]>();
+    for (const lot of lots) {
+        const key = `${lot.departmentId}:${lot.inventoryItemId}`;
+        const group = lotsByStockKey.get(key) || [];
+        group.push(lot);
+        lotsByStockKey.set(key, group);
+    }
+
+    const operations: any[] = [];
+    for (const entry of requested) {
+        let remaining = entry.quantity;
+        const key = `${entry.departmentId}:${entry.inventoryItemId}`;
+        for (const lot of lotsByStockKey.get(key) || []) {
+            if (remaining <= 0) break;
+            const take = round(Math.min(Number(lot.remainingQuantity), remaining));
+            if (take <= 0) continue;
+            operations.push({
+                updateOne: {
+                    filter: { _id: lot._id, remainingQuantity: { $gte: take } },
+                    update: { $inc: { remainingQuantity: -take } },
+                },
+            });
+            remaining = round(remaining - take);
+        }
+        // As in consumeKitchenLots, legacy stock without lots remains valid.
+    }
+
+    if (!operations.length) return;
+    const result = await Lot.bulkWrite(operations, session ? { session } : undefined);
+    const matched = Number(result.matchedCount ?? result.nMatched ?? result.result?.nMatched ?? 0);
+    if (matched !== operations.length) {
+        throw new Error('Kitchen stock changed while being deducted. Refresh and try again.');
+    }
+}
+
 export async function seedLegacyKitchenLots(models: { Lot: any; KitchenStock: any; InventoryItem: any }, restaurantId: any, session?: mongoose.ClientSession) {
     const balances = await models.KitchenStock.find({ restaurantId, currentStock: { $gt: 0 } })
         .select('restaurantId departmentId inventoryItemId currentStock')

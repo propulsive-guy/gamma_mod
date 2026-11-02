@@ -8,7 +8,6 @@ import InventoryItem, { INVENTORY_UNITS, type InventoryUnit } from '@/models/Inv
 import MenuItem from '@/models/MenuItem';
 import ProcurementDocument, { type IProcurementLine } from '@/models/ProcurementDocument';
 import StockMovement, { type IStockMovement } from '@/models/StockMovement';
-import { ensureLowStockPurchaseDrafts } from '@/lib/lowStockProcurement';
 import { DEFAULT_EXPIRY_DAYS } from '../../../shared/kitchenStockLots';
 
 export type InventoryInput = {
@@ -348,7 +347,6 @@ async function restaurantContext() {
 export async function getLowStockItems() {
     try {
         const { restaurantId } = await restaurantContext();
-        await ensureLowStockPurchaseDrafts(restaurantId);
         const items = await InventoryItem.find({
             restaurantId,
             isActive: true,

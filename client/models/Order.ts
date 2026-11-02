@@ -212,7 +212,7 @@ const orderSchema = new Schema<IOrder>(
 // Indexes for efficient queries
 orderSchema.index({ restaurantId: 1, createdAt: -1 });
 orderSchema.index({ tableId: 1, createdAt: -1 });
-orderSchema.index({ sessionId: 1 });
+orderSchema.index({ tableId: 1, sessionId: 1, createdAt: -1 });
 orderSchema.index({ status: 1, restaurantId: 1 });
 orderSchema.index({ restaurantId: 1, status: 1, createdAt: -1 }); // Optimized for analytics
 orderSchema.index({ restaurantId: 1, status: 1, paymentStatus: 1, createdAt: -1 });

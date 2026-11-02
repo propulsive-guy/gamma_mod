@@ -14,6 +14,7 @@ import StockMovement from '@/models/StockMovement';
 import Table from '@/models/Table';
 import {
     consumeKitchenLots,
+    consumeKitchenLotsBatch,
     createKitchenLot,
     expireDueKitchenLots,
     effectiveExpiryDays,
@@ -211,16 +212,12 @@ export async function createOrder(data: any) {
         await activeSession.withTransaction(async () => {
             const restaurant = await Restaurant.findById(restaurantId)
                 .select('inventoryTrackingEnabled gstPercentage sgstPercentage packagingCharge')
-                .session(activeSession);
+                .session(activeSession)
+                .lean();
             if (!restaurant) throw new Error('This restaurant is no longer available. Refresh the menu and try again.');
             const inventoryTrackingEnabled = restaurant.inventoryTrackingEnabled !== false;
 
-            if (inventoryTrackingEnabled) {
-                await seedLegacyKitchenLots({ Lot: KitchenStockLot, KitchenStock, InventoryItem }, restaurantId, activeSession);
-                await expireDueKitchenLots({ Lot: KitchenStockLot, KitchenStock, StockMovement, InventoryItem }, restaurantId, activeSession);
-            }
-
-            const table = await Table.findOne({ _id: tableId, restaurantId, isActive: true }).session(activeSession);
+            const table = await Table.findOne({ _id: tableId, restaurantId, isActive: true }).session(activeSession).lean();
             if (!table) throw new Error('This table is unavailable. Ask the restaurant staff for help.');
 
             const recentOrderCount = await Order.countDocuments({
@@ -234,7 +231,7 @@ export async function createOrder(data: any) {
                 _id: { $in: data.items.map((item: any) => item.menuItemId) },
                 restaurantId,
                 isAvailable: true,
-            }).session(activeSession);
+            }).session(activeSession).lean();
             const itemsById = new Map(menuItems.map((item) => [String(item._id), item]));
             const required = new Map<string, { departmentId: mongoose.Types.ObjectId; inventoryItemId: mongoose.Types.ObjectId; quantity: number }>();
             let total = 0;
@@ -268,6 +265,13 @@ export async function createOrder(data: any) {
                     itemType: menuItem.itemType || 'food',
                 };
             });
+
+            // Validate the restaurant, table, rate limit, and menu first. Only
+            // then run the inventory expiry sweep, which may touch many lots.
+            if (inventoryTrackingEnabled && required.size > 0) {
+                await seedLegacyKitchenLots({ Lot: KitchenStockLot, KitchenStock, InventoryItem }, restaurantId, activeSession);
+                await expireDueKitchenLots({ Lot: KitchenStockLot, KitchenStock, StockMovement, InventoryItem }, restaurantId, activeSession);
+            }
 
             const gstRate = Math.max(0, Number(restaurant.gstPercentage) || 0);
             const sgstRate = Math.max(0, Number(restaurant.sgstPercentage) || 0);
@@ -308,7 +312,7 @@ export async function createOrder(data: any) {
                 ? [...new Set([...required.values()].map((part) => String(part.inventoryItemId)))]
                 : [];
             const stockItems = requiredIds.length
-                ? await InventoryItem.find({ _id: { $in: requiredIds }, restaurantId, isActive: true }).session(activeSession)
+                ? await InventoryItem.find({ _id: { $in: requiredIds }, restaurantId, isActive: true }).session(activeSession).lean()
                 : [];
             const stockById = new Map(stockItems.map((item) => [String(item._id), item]));
             order.items = orderItems.map((line: any) => {
@@ -342,35 +346,62 @@ export async function createOrder(data: any) {
                 : [];
 
             order.inventoryUsage = usage;
-            for (const part of usage) {
-                const quantity = roundQuantity(part.quantity);
-                const before = await KitchenStock.findOneAndUpdate(
-                    { restaurantId, departmentId: part.departmentId, inventoryItemId: part.inventoryItemId, currentStock: { $gte: quantity } },
-                    { $inc: { currentStock: -quantity } },
-                    { session: activeSession },
-                );
-                if (!before) {
-                    const ingredient = stockById.get(String(part.inventoryItemId));
-                    throw new Error(`Not enough kitchen stock for ${ingredient?.name || 'an ingredient'}. Ask the store for a department requisition.`);
+            if (usage.length) {
+                const stockRows = await KitchenStock.find({
+                    restaurantId,
+                    $or: usage.map((part) => ({ departmentId: part.departmentId, inventoryItemId: part.inventoryItemId })),
+                }).select('departmentId inventoryItemId currentStock').session(activeSession).lean();
+                const kitchenStockByKey = new Map(stockRows.map((row: any) => [`${row.departmentId}:${row.inventoryItemId}`, row]));
+
+                for (const part of usage) {
+                    const quantity = roundQuantity(part.quantity);
+                    const stock = kitchenStockByKey.get(`${part.departmentId}:${part.inventoryItemId}`) as any;
+                    if (!stock || Number(stock.currentStock) < quantity) {
+                        const ingredient = stockById.get(String(part.inventoryItemId));
+                        throw new Error(`Not enough kitchen stock for ${ingredient?.name || 'an ingredient'}. Ask the store for a department requisition.`);
+                    }
                 }
-                await consumeKitchenLots(KitchenStockLot, {
+
+                const stockUpdate = await KitchenStock.bulkWrite(usage.map((part) => ({
+                    updateOne: {
+                        filter: {
+                            restaurantId,
+                            departmentId: part.departmentId,
+                            inventoryItemId: part.inventoryItemId,
+                            currentStock: { $gte: roundQuantity(part.quantity) },
+                        },
+                        update: { $inc: { currentStock: -roundQuantity(part.quantity) } },
+                    },
+                })), { session: activeSession });
+                const matchedStockUpdates = Number(stockUpdate.matchedCount || 0);
+                if (matchedStockUpdates !== usage.length) {
+                    throw new Error('Kitchen stock changed while this order was being placed. Please try again.');
+                }
+
+                await consumeKitchenLotsBatch(KitchenStockLot, usage.map((part) => ({
                     restaurantId,
                     departmentId: part.departmentId,
                     inventoryItemId: part.inventoryItemId,
-                }, quantity, activeSession);
-                await StockMovement.create([{
-                    restaurantId,
-                    inventoryItemId: part.inventoryItemId,
-                    departmentId: part.departmentId,
-                    inventoryCategory: part.inventoryCategory,
-                    orderId: order._id,
-                    type: 'usage',
-                    quantity: -quantity,
-                    stockBefore: before.currentStock,
-                    stockAfter: roundQuantity(before.currentStock - quantity),
-                    unitCost: part.unitCost,
-                    note: `Reserved for order ${order._id}`,
-                }], { session: activeSession });
+                    quantity: roundQuantity(part.quantity),
+                })), activeSession);
+
+                await StockMovement.insertMany(usage.map((part) => {
+                    const quantity = roundQuantity(part.quantity);
+                    const before = Number((kitchenStockByKey.get(`${part.departmentId}:${part.inventoryItemId}`) as any).currentStock);
+                    return {
+                        restaurantId,
+                        inventoryItemId: part.inventoryItemId,
+                        departmentId: part.departmentId,
+                        inventoryCategory: part.inventoryCategory,
+                        orderId: order._id,
+                        type: 'usage',
+                        quantity: -quantity,
+                        stockBefore: before,
+                        stockAfter: roundQuantity(before - quantity),
+                        unitCost: part.unitCost,
+                        note: `Reserved for order ${order._id}`,
+                    };
+                }), { session: activeSession });
             }
 
             order.inventoryDeducted = !inventoryTrackingEnabled || usage.length > 0;
@@ -399,10 +430,8 @@ export async function getOrders() {
             Order.find({ restaurantId }).select(orderFields).sort({ createdAt: -1 }).limit(100).populate('tableId', 'tableNumber').lean(),
             Order.find({
                 restaurantId,
-                $or: [
-                    { status: { $ne: 'cancelled' }, paymentStatus: { $ne: 'paid' } },
-                    { orderType: 'takeaway' },
-                ],
+                status: { $ne: 'cancelled' },
+                paymentStatus: { $ne: 'paid' },
             }).select(orderFields).sort({ createdAt: -1 }).populate('tableId', 'tableNumber').lean(),
         ]);
         const byId = new Map([...recent, ...outstanding].map((order) => [String(order._id), order]));
@@ -410,6 +439,24 @@ export async function getOrders() {
         return { success: true, data: JSON.parse(JSON.stringify(orders)) };
     } catch (error) {
         return { success: false, error: resultError('Error fetching orders:', error, 'Failed to fetch orders.') };
+    }
+}
+
+/** Minimal pending-order feed for dashboard alerts; avoids polling full order history. */
+export async function getOrderAlertFeed() {
+    try {
+        const restaurantId = await currentRestaurantId();
+        if (!restaurantId) return { success: false, error: 'Your session has expired. Sign in again.' };
+        await dbConnect();
+        const orders = await Order.find({ restaurantId, status: 'pending' })
+            .select('items.name items.quantity total status orderType tableId createdAt')
+            .sort({ createdAt: -1 })
+            .limit(100)
+            .populate('tableId', 'tableNumber')
+            .lean();
+        return { success: true, data: JSON.parse(JSON.stringify(orders)) };
+    } catch (error) {
+        return { success: false, error: resultError('Error fetching order alerts:', error, 'Failed to fetch new order alerts.') };
     }
 }
 

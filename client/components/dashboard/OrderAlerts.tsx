@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { toast } from 'react-hot-toast';
 import { ArrowRightIcon, BellAlertIcon, BellSlashIcon, SpeakerWaveIcon } from '@heroicons/react/24/outline';
-import { getOrders } from '@/app/actions/order';
+import { getOrderAlertFeed } from '@/app/actions/order';
 import { useSocket } from '@/hooks/useSocket';
 import { formatCurrency } from '@/lib/utils';
 
@@ -201,12 +201,13 @@ export default function OrderAlerts({ restaurantId, baselineTime }: { restaurant
         if (!restaurantId) return;
         let active = true;
         let fetching = false;
-        const refresh = async () => {
+        const refresh = async (force = false) => {
+            if (!force && socket?.connected) return;
             if (fetching) return;
             fetching = true;
             const refreshStartedAt = Date.now();
             try {
-                const result = await getOrders();
+                const result = await getOrderAlertFeed();
                 if (!active || !result.success || !result.data) return;
                 if (lastSocketChangeAt.current >= refreshStartedAt) return;
                 const orders = result.data as IncomingOrder[];
@@ -225,10 +226,16 @@ export default function OrderAlerts({ restaurantId, baselineTime }: { restaurant
                 fetching = false;
             }
         };
-        void refresh();
-        const interval = window.setInterval(refresh, 10000);
-        return () => { active = false; window.clearInterval(interval); };
-    }, [restaurantId, notifyNewOrder, ringAutomatically, stopRinging]);
+        void refresh(true);
+        const handleReconnect = () => { void refresh(true); };
+        socket?.on('connect', handleReconnect);
+        const interval = window.setInterval(() => { void refresh(); }, 10000);
+        return () => {
+            active = false;
+            window.clearInterval(interval);
+            socket?.off('connect', handleReconnect);
+        };
+    }, [restaurantId, notifyNewOrder, ringAutomatically, stopRinging, socket]);
 
     useEffect(() => {
         if (!restaurantId) return;

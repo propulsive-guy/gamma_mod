@@ -27,10 +27,8 @@ export default async function OrdersPage() {
             .lean(),
         Order.find({
             restaurantId: session.user.restaurantId,
-            $or: [
-                { status: { $ne: 'cancelled' }, paymentStatus: { $ne: 'paid' } },
-                { orderType: 'takeaway' },
-            ],
+            status: { $ne: 'cancelled' },
+            paymentStatus: { $ne: 'paid' },
         })
             .select(orderFields)
             .populate('tableId', 'tableNumber')

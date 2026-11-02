@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useTransition } from 'react';
+import { useState, useTransition } from 'react';
 import Link from 'next/link';
 import { ArrowDownTrayIcon, ArrowPathIcon, BanknotesIcon, ChartBarIcon, CubeIcon } from '@heroicons/react/24/outline';
 import { getManagementReport, type ManagementPeriod } from '@/app/actions/management';
@@ -54,29 +54,20 @@ export default function ManagementReport({ initialReport }: { initialReport?: Re
     const [report, setReport] = useState<Report | null>(initialReport || null);
     const [error, setError] = useState('');
     const [pending, startTransition] = useTransition();
-    useEffect(() => {
-        if (report) return;
-        startTransition(async () => {
-            const result = await getManagementReport('month', anchorDate);
-            if (result.success) setReport(result.report);
-            else setError(result.error || 'Could not load this report.');
-        });
-    }, [report, anchorDate]);
-    function changePeriod(next: ManagementPeriod) {
-        setPeriod(next);
-        startTransition(async () => {
-            const result = await getManagementReport(next, anchorDate);
-            if (result.success) { setReport(result.report); setError(''); }
-            else setError(result.error || 'Could not refresh this report.');
-        });
-    }
-    function changeDate(nextDate: string) {
+    function loadReport(nextPeriod: ManagementPeriod, nextDate: string) {
+        setPeriod(nextPeriod);
         setAnchorDate(nextDate);
         startTransition(async () => {
-            const result = await getManagementReport(period, nextDate);
+            const result = await getManagementReport(nextPeriod, nextDate);
             if (result.success) { setReport(result.report); setError(''); }
-            else setError(result.error || 'Could not refresh this report.');
+            else setError(result.error || 'Could not generate this report.');
         });
+    }
+    function changePeriod(next: ManagementPeriod) {
+        loadReport(next, anchorDate);
+    }
+    function changeDate(nextDate: string) {
+        loadReport(period, nextDate);
     }
     function exportCsv() {
         if (!report) return;
@@ -87,7 +78,25 @@ export default function ManagementReport({ initialReport }: { initialReport?: Re
         const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
         const anchor = document.createElement('a'); anchor.href = url; anchor.download = `management-report-${report.period}-${indiaToday()}.csv`; anchor.click(); URL.revokeObjectURL(url);
     }
-    if (!report) return <section className="rounded-3xl border border-slate-200/80 bg-slate-50 p-5 sm:p-6"><div className="flex items-center gap-2 text-sm font-semibold text-slate-700"><ArrowPathIcon className={`h-4 w-4 ${pending ? 'animate-spin' : ''}`} /> Loading management report…</div>{error && <p role="alert" className="mt-3 text-sm text-rose-700">{error}</p>}</section>;
+    if (!report) return <section className="flex flex-col justify-between gap-4 rounded-3xl border border-slate-200/80 bg-slate-50 p-5 sm:flex-row sm:items-center sm:p-6">
+        <div>
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Management reports</p>
+            <h2 className="mt-1 text-xl font-bold tracking-tight text-slate-900">MIS & balance sheet</h2>
+            <p className="mt-1 text-sm text-slate-500">Generate a weekly or monthly report when you need it. The detailed report can take longer to calculate, so it won’t hold up your dashboard.</p>
+            {error && <p role="alert" className="mt-3 text-sm text-rose-700">{error}</p>}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">
+                <button type="button" onClick={() => setPeriod('week')} className={`min-h-9 rounded-lg px-3 text-xs font-bold ${period === 'week' ? 'bg-slate-900 text-white' : 'text-slate-600'}`}>Weekly</button>
+                <button type="button" onClick={() => setPeriod('month')} className={`min-h-9 rounded-lg px-3 text-xs font-bold ${period === 'month' ? 'bg-slate-900 text-white' : 'text-slate-600'}`}>Monthly</button>
+            </div>
+            <label className="sr-only" htmlFor="management-report-date">Choose a date within the reporting period</label>
+            <input id="management-report-date" type="date" value={anchorDate} onChange={(event) => setAnchorDate(event.target.value)} className="min-h-10 rounded-xl border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700" />
+            <button type="button" disabled={pending} onClick={() => loadReport(period, anchorDate)} className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 text-sm font-bold text-white disabled:cursor-wait disabled:opacity-60">
+                <ArrowPathIcon className={`h-4 w-4 ${pending ? 'animate-spin' : ''}`} />{pending ? 'Generating report…' : `Generate ${period === 'month' ? 'monthly' : 'weekly'} MIS`}
+            </button>
+        </div>
+    </section>;
     const metricCards = [
         { label: 'Net sales', value: report.mis.netSales, detail: `${report.mis.orders} served orders · GST removed`, icon: BanknotesIcon, tone: 'bg-emerald-50 text-emerald-700' },
         { label: 'Food cost', value: report.mis.foodCost, detail: `${report.mis.foodCostPercent.toFixed(2)}% of net sales`, icon: CubeIcon, tone: 'bg-amber-50 text-amber-700' },

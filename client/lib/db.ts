@@ -45,10 +45,14 @@ async function dbConnect() {
   if (!cached.promise) {
     const opts = {
       bufferCommands: false,
-      maxPoolSize: 1,
+      // A single socket serializes unrelated dashboard reads and order writes.
+      // Keep the pool small for serverless instances, while allowing a few
+      // concurrent requests to reach MongoDB without waiting behind one query.
+      maxPoolSize: 5,
       serverSelectionTimeoutMS: 5000,
       socketTimeoutMS: 45000,
       maxIdleTimeMS: 10000,
+      waitQueueTimeoutMS: 10000,
     };
 
     cached.promise = mongoose.connect(mongoUri, opts).then((mongoose) => {
