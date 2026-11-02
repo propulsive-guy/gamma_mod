@@ -10,6 +10,8 @@ import StoreManager from '@/components/dashboard/StoreManager';
 import { ensureLowStockPurchaseDrafts } from '@/lib/lowStockProcurement';
 import KitchenDepartment from '@/models/KitchenDepartment';
 import KitchenStock from '@/models/KitchenStock';
+import MenuItem from '@/models/MenuItem';
+import Restaurant from '@/models/Restaurant';
 import { processKitchenStockExpiry } from '@/lib/kitchenStockLots';
 import { INVENTORY_MIS_CATEGORIES } from '@/lib/inventoryCategories';
 
@@ -31,7 +33,7 @@ export default async function StorePage({ searchParams }: { searchParams: Promis
     ]);
     const [query] = await Promise.all([searchParams, setupPromise]);
     const initialSection = sections.includes(query.section as typeof sections[number]) ? query.section as typeof sections[number] : 'overview';
-    const [items, categories, documents, entries, settings, departments, kitchenStocks] = await Promise.all([
+    const [items, categories, documents, entries, settings, departments, kitchenStocks, menuItems, restaurant] = await Promise.all([
         InventoryItem.find({ restaurantId, isActive: true })
             .select('name sku category unit currentStock reorderLevel costPerUnit supplier')
             .sort({ category: 1, name: 1 }).lean(),
@@ -46,7 +48,18 @@ export default async function StorePage({ searchParams }: { searchParams: Promis
             .select('openingDate openingCash openingInventoryValue otherAssets openingPayables openingLoans otherLiabilities').lean(),
         KitchenDepartment.find({ restaurantId, isActive: true }).select('name').sort({ name: 1 }).lean(),
         KitchenStock.find({ restaurantId }).select('departmentId inventoryItemId currentStock').lean(),
+        MenuItem.find({ restaurantId, isAvailable: true }).select('departmentId recipe').lean(),
+        Restaurant.findById(restaurantId).select('inventoryTrackingEnabled').lean(),
     ]);
+
+    const activeInventoryIds = new Set(items.map((item) => String(item._id)));
+    const menuTrackingReady = menuItems.filter((menuItem) => Boolean(
+        menuItem.departmentId && menuItem.recipe?.length && menuItem.recipe.every((part) => activeInventoryIds.has(String(part.inventoryItemId))),
+    ));
+    const mappedIngredients = [...new Map(menuTrackingReady.flatMap((menuItem) => menuItem.recipe.map((part) => {
+        const key = `${String(menuItem.departmentId)}:${String(part.inventoryItemId)}`;
+        return [key, { departmentId: String(menuItem.departmentId), inventoryItemId: String(part.inventoryItemId) }] as const;
+    }))).values()];
 
     const categoryNames = [...new Map(
         [...INVENTORY_MIS_CATEGORIES, ...items.map((item) => item.category), ...categories.map((category) => category.name)]
@@ -63,5 +76,11 @@ export default async function StorePage({ searchParams }: { searchParams: Promis
         initialSettings={settings ? JSON.parse(JSON.stringify(settings)) : null}
         initialDepartments={JSON.parse(JSON.stringify(departments))}
         initialKitchenStocks={JSON.parse(JSON.stringify(kitchenStocks))}
+        initialMenuStatus={{
+            trackingEnabled: restaurant?.inventoryTrackingEnabled !== false,
+            activeMenuItems: menuItems.length,
+            readyMenuItems: menuTrackingReady.length,
+            mappedIngredients,
+        }}
     />;
 }

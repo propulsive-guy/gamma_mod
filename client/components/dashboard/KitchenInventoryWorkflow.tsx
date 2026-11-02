@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'react-hot-toast';
 import { createKitchenDepartment, createKitchenRequisition, editIssuedKitchenRequisition, issueKitchenRequisition, recordKitchenWastage, updateKitchenRequisition, updateRequisitionDate } from '@/app/actions/store';
@@ -10,12 +10,15 @@ type Department = { _id: string; name: string };
 type Stock = { _id: string; departmentId: string; inventoryItemId: string; currentStock: number };
 type Request = { _id: string; reference: string; status: string; departmentId?: string; documentDate?: string; createdAt: string; notes?: string; lines?: { inventoryItemId: string; itemName: string; unit: string; requestedQuantity: number; orderedQuantity?: number; approvedQuantity?: number }[] };
 type Line = { inventoryItemId: string; quantity: string };
+type LowIngredient = { departmentId: string; departmentName: string; inventoryItemId: string; itemName: string; unit: string; storeAvailableStock: number };
+type Prefill = { departmentId: string; inventoryItemId: string; nonce: number } | null;
 const input = 'min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800';
 const todayIndia = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 const dateValue = (value?: string) => value ? new Date(value).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) : todayIndia();
 
-export default function KitchenInventoryWorkflow({ items, departments, stocks, requests }: {
+export default function KitchenInventoryWorkflow({ items, departments, stocks, requests, lowIngredients = [], prefill = null, onPrefillHandled, onOpenPurchasing }: {
     items: Item[]; departments: Department[]; stocks: Stock[]; requests: Request[];
+    lowIngredients?: LowIngredient[]; prefill?: Prefill; onPrefillHandled?: () => void; onOpenPurchasing?: () => void;
 }) {
     const router = useRouter();
     const itemById = useMemo(() => new Map(items.map((item) => [String(item._id), item])), [items]);
@@ -45,6 +48,39 @@ export default function KitchenInventoryWorkflow({ items, departments, stocks, r
     const [wasteFor, setWasteFor] = useState<{ departmentId: string; departmentName: string; inventoryItemId: string; itemName: string; unit: string; available: number } | null>(null);
     const [wasteQuantity, setWasteQuantity] = useState('');
     const [wasteNote, setWasteNote] = useState('');
+    const requestedAmounts = useMemo(() => {
+        const totals = new Map<string, number>();
+        for (const line of lines) {
+            if (!line.inventoryItemId) continue;
+            totals.set(line.inventoryItemId, (totals.get(line.inventoryItemId) || 0) + Number(line.quantity || 0));
+        }
+        return [...totals].map(([inventoryItemId, quantity]) => ({ inventoryItemId, quantity, item: itemById.get(inventoryItemId) }));
+    }, [lines, itemById]);
+    const storeShortfalls = !editingRequest ? requestedAmounts.filter(({ quantity, item }) => item && quantity > Number(item.storeAvailableStock)) : [];
+
+    useEffect(() => {
+        if (!prefill) return;
+        setEditingRequest(null);
+        setDepartmentId(prefill.departmentId);
+        setLines([{ inventoryItemId: prefill.inventoryItemId, quantity: '' }]);
+        setNote('');
+        setRequestDate(todayIndia());
+        onPrefillHandled?.();
+        window.requestAnimationFrame(() => requestFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    }, [prefill, onPrefillHandled]);
+
+    function startRequisition(ingredient: LowIngredient) {
+        if (ingredient.storeAvailableStock <= 0) {
+            onOpenPurchasing?.();
+            return;
+        }
+        setEditingRequest(null);
+        setDepartmentId(ingredient.departmentId);
+        setLines([{ inventoryItemId: ingredient.inventoryItemId, quantity: '' }]);
+        setNote('');
+        setRequestDate(todayIndia());
+        window.requestAnimationFrame(() => requestFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    }
     const kitchenStockPanel = <section className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="font-bold text-slate-900">Kitchen stock on hand</h3><p className="mt-1 text-xs text-slate-600">Stock already issued from Store, shown separately for each department.</p></div><span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-emerald-800">Store balance is separate</span></div>
         <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{departments.map((department) => {
@@ -82,6 +118,10 @@ export default function KitchenInventoryWorkflow({ items, departments, stocks, r
 
     async function submitRequest(event: React.FormEvent) {
         event.preventDefault();
+        if (storeShortfalls.length) {
+            toast.error(`Not enough Store stock for ${storeShortfalls.map(({ item }) => item?.name).join(', ')}.`);
+            return;
+        }
         setSaving(true);
         const payload = {
             departmentId, documentDate: requestDate, notes: note,
@@ -138,6 +178,10 @@ export default function KitchenInventoryWorkflow({ items, departments, stocks, r
 
     return <section className="space-y-5 rounded-2xl border border-violet-100 bg-violet-50/50 p-4 sm:p-5">
         <div><p className="text-xs font-bold uppercase tracking-wider text-violet-700">Kitchen operations</p><h2 className="mt-1 text-lg font-bold text-slate-900">Departments, stock and requests</h2><p className="mt-1 text-sm text-slate-600">Create kitchen departments here. Submitting a request immediately moves the listed quantities from Store stock into that department.</p></div>
+        {lowIngredients.length > 0 && <section className="overflow-hidden rounded-xl border border-rose-200 bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-100 bg-rose-50 p-4"><div><h3 className="font-bold text-rose-950">Menu ingredients with no kitchen stock</h3><p className="mt-1 text-xs text-rose-800">These ingredients are mapped to menu recipes. Replenish the right department before accepting more orders.</p></div><span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-rose-800">{lowIngredients.length} need stock</span></div>
+            <div className="divide-y divide-slate-100">{lowIngredients.map((ingredient) => <article key={`${ingredient.departmentId}:${ingredient.inventoryItemId}`} className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between sm:px-4"><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{ingredient.itemName}</p><p className="mt-0.5 text-xs text-slate-500">{ingredient.departmentName} · Store available: {ingredient.storeAvailableStock.toFixed(2)} {ingredient.unit}</p></div><button type="button" onClick={() => startRequisition(ingredient)} className={`min-h-10 shrink-0 rounded-lg px-3 text-xs font-bold ${ingredient.storeAvailableStock > 0 ? 'bg-violet-700 text-white hover:bg-violet-800' : 'border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100'}`}>{ingredient.storeAvailableStock > 0 ? 'Prepare requisition' : 'Open vendor purchasing'}</button></article>)}</div>
+        </section>}
         {kitchenStockPanel}
         <div className="grid gap-4 lg:grid-cols-[0.8fr_1.2fr]">
             <div className="rounded-xl border border-slate-200 bg-white p-4"><h3 className="font-bold text-slate-900">Kitchen departments</h3>
@@ -151,7 +195,8 @@ export default function KitchenInventoryWorkflow({ items, departments, stocks, r
                     <label className="block text-xs font-semibold text-slate-600">Requisition date<input required type="date" value={requestDate} onChange={(event) => setRequestDate(event.target.value)} className={input} /></label>
                     {lines.map((line, index) => <div key={index} className="grid grid-cols-[minmax(0,1fr)_6.5rem_auto] gap-2"><select required value={line.inventoryItemId} onChange={(event) => setLines(lines.map((row, i) => i === index ? { ...row, inventoryItemId: event.target.value } : row))} className={input}><option value="">Choose ingredient</option>{items.map((item) => <option key={item._id} value={item._id}>{item.name} · {item.storeAvailableStock.toFixed(2)} {item.unit} available in Store</option>)}</select><input required type="number" min="0.0001" step="0.0001" value={line.quantity} onChange={(event) => setLines(lines.map((row, i) => i === index ? { ...row, quantity: event.target.value } : row))} placeholder="Qty" className={input} /><button type="button" onClick={() => setLines(lines.filter((_, i) => i !== index))} className="px-2 text-xs font-semibold text-rose-600">Remove</button></div>)}
                     <button type="button" onClick={() => setLines([...lines, { inventoryItemId: '', quantity: '' }])} className="text-xs font-bold text-violet-700">+ Add ingredient</button>
-                    <div className="flex flex-col gap-2 sm:flex-row"><input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Note (optional)" className={input} /><button type="button" onClick={() => { setEditingRequest(null); setLines([{ inventoryItemId: '', quantity: '' }]); setNote(''); setRequestDate(todayIndia()); }} className="min-h-11 rounded-xl border border-slate-200 px-4 text-sm font-semibold text-slate-600">Clear</button><button disabled={saving || !departments.length || !lines.length} className="min-h-11 shrink-0 rounded-xl bg-violet-700 px-4 text-sm font-bold text-white disabled:opacity-50">{saving ? 'Saving…' : editingRequest?.status === 'approved' ? 'Save requisition' : editingRequest ? 'Save and issue changes' : 'Submit & issue stock'}</button></div>
+                    {storeShortfalls.length > 0 && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">Store stock is short for {storeShortfalls.map(({ item }) => item?.name).join(', ')}. Receive stock before issuing this requisition.</p>}
+                    <div className="flex flex-col gap-2 sm:flex-row"><input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Note (optional)" className={input} /><button type="button" onClick={() => { setEditingRequest(null); setLines([{ inventoryItemId: '', quantity: '' }]); setNote(''); setRequestDate(todayIndia()); }} className="min-h-11 rounded-xl border border-slate-200 px-4 text-sm font-semibold text-slate-600">Clear</button><button disabled={saving || !departments.length || !lines.length || storeShortfalls.length > 0} className="min-h-11 shrink-0 rounded-xl bg-violet-700 px-4 text-sm font-bold text-white disabled:opacity-50">{saving ? 'Saving…' : editingRequest?.status === 'approved' ? 'Save requisition' : editingRequest ? 'Save and issue changes' : 'Submit & issue stock'}</button></div>
                 </form>
             </div>
         </div>

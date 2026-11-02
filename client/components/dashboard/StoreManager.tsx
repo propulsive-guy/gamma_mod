@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'react-hot-toast';
-import { ArchiveBoxIcon, ArrowDownTrayIcon, ArrowPathIcon, BanknotesIcon, ClipboardDocumentListIcon, PencilSquareIcon, TruckIcon } from '@heroicons/react/24/outline';
+import { ArchiveBoxIcon, ArrowDownTrayIcon, ArrowPathIcon, BanknotesIcon, BuildingStorefrontIcon, ChartBarIcon, ClipboardDocumentListIcon, ExclamationTriangleIcon, PencilSquareIcon, ShoppingCartIcon, TruckIcon } from '@heroicons/react/24/outline';
 import { InventoryBillScanner } from '@/components/dashboard/InventoryBillScanner';
 import EditSupplierBillDialog from '@/components/dashboard/EditSupplierBillDialog';
 import VendorPurchaseOrderDialog from '@/components/dashboard/VendorPurchaseOrderDialog';
@@ -22,6 +22,7 @@ type Department = { _id: string; name: string };
 type KitchenStockRow = { _id: string; departmentId: string; inventoryItemId: string; currentStock: number };
 type StoreEntry = { _id: string; type: string; category: string; amount: number; entryDate: string; reference?: string; note?: string };
 type Settings = { openingDate: string; openingCash: number; openingInventoryValue: number; otherAssets: number; openingPayables: number; openingLoans: number; otherLiabilities: number } | null;
+type MenuStatus = { trackingEnabled: boolean; activeMenuItems: number; readyMenuItems: number; mappedIngredients: { departmentId: string; inventoryItemId: string }[] };
 const quantity = (value: number) => Number(value || 0).toFixed(2);
 const money = (amount: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(amount || 0);
 const dateLabel = (date: string) => new Date(date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -30,19 +31,22 @@ const initialEntryDate = () => new Date().toLocaleDateString('en-CA', { timeZone
 const dateInputValue = (value?: string) => value ? new Date(value).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) : initialEntryDate();
 type StoreSection = 'overview' | 'requisitions' | 'purchasing' | 'stock' | 'expenses' | 'balances';
 
-export default function StoreManager({ initialSection = 'overview', initialItems, initialCategories, initialDocuments, initialEntries, initialSettings, initialDepartments, initialKitchenStocks }: {
+export default function StoreManager({ initialSection = 'overview', initialItems, initialCategories, initialDocuments, initialEntries, initialSettings, initialDepartments, initialKitchenStocks, initialMenuStatus }: {
     initialSection?: StoreSection;
     initialItems: StoreItem[];
     initialCategories: string[]; initialDocuments: StoreDocument[]; initialEntries: StoreEntry[]; initialSettings: Settings; initialDepartments: Department[]; initialKitchenStocks: KitchenStockRow[];
+    initialMenuStatus: MenuStatus;
 }) {
     const router = useRouter();
     const [storeItems, setStoreItems] = useState(initialItems);
     const [kitchenStocks, setKitchenStocks] = useState(initialKitchenStocks);
+    const previousLowStockIds = useRef(new Set(initialItems.filter((item) => item.reorderLevel > 0 && item.currentStock <= item.reorderLevel).map((item) => item._id)));
     const [minimumStockValues, setMinimumStockValues] = useState<Record<string, string>>(() => Object.fromEntries(initialItems.map((item) => [item._id, String(item.reorderLevel)])));
     const [categories, setCategories] = useState(() => [...new Set([...INVENTORY_MIS_CATEGORIES, ...initialCategories])]);
     const [refreshingStock, setRefreshingStock] = useState(false);
     const refreshInProgress = useRef(false);
     const [stockQuery, setStockQuery] = useState('');
+    const [stockFilter, setStockFilter] = useState<'all' | 'low'>('all');
     const [exportMonth, setExportMonth] = useState(() => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 7));
     const refreshStock = useCallback(async () => {
         if (document.visibilityState !== 'visible' || refreshInProgress.current) return;
@@ -51,6 +55,9 @@ export default function StoreManager({ initialSection = 'overview', initialItems
         try {
             const result = await getStoreStockSnapshot();
             if (result.success) {
+                const nextLowStockIds = new Set(result.items.filter((item) => item.reorderLevel > 0 && item.currentStock <= item.reorderLevel).map((item) => item._id));
+                const newlyLow = [...nextLowStockIds].some((id) => !previousLowStockIds.current.has(id));
+                previousLowStockIds.current = nextLowStockIds;
                 setStoreItems(result.items);
                 setKitchenStocks(result.kitchenStocks);
                 setMinimumStockValues((current) => {
@@ -58,6 +65,9 @@ export default function StoreManager({ initialSection = 'overview', initialItems
                     for (const item of result.items) if (!(item._id in next)) next[item._id] = String(item.reorderLevel);
                     return next;
                 });
+                // The server page creates idempotent, review-only purchase drafts.
+                // Refresh once when stock first crosses a minimum so those suggestions appear without a manual reload.
+                if (newlyLow) router.refresh();
             }
         } catch (error) {
             console.error('Refreshing Store stock failed:', error);
@@ -65,7 +75,7 @@ export default function StoreManager({ initialSection = 'overview', initialItems
             refreshInProgress.current = false;
             setRefreshingStock(false);
         }
-    }, []);
+    }, [router]);
     useEffect(() => {
         setStoreItems(initialItems);
         setMinimumStockValues((current) => {
@@ -95,8 +105,9 @@ export default function StoreManager({ initialSection = 'overview', initialItems
         sum + Number(stock.currentStock || 0) * Number(itemById.get(String(stock.inventoryItemId))?.costPerUnit || 0)
     ), 0), [kitchenStocks, itemById]);
     const startingInventoryValue = storeInventoryValue + kitchenInventoryValue;
-    const [tab, setTab] = useState<'buying' | 'expenses' | 'balances' | 'stock'>(initialSection === 'expenses' ? 'expenses' : initialSection === 'balances' ? 'balances' : initialSection === 'stock' || initialSection === 'overview' ? 'stock' : 'buying');
-    const [buyingView, setBuyingView] = useState<'kitchen' | 'vendors'>(initialSection === 'purchasing' ? 'vendors' : 'kitchen');
+    const [tab, setTab] = useState<StoreSection>(initialSection);
+    const [requisitionPrefill, setRequisitionPrefill] = useState<{ departmentId: string; inventoryItemId: string; nonce: number } | null>(null);
+    const clearRequisitionPrefill = useCallback(() => setRequisitionPrefill(null), []);
     const [showVendorOrder, setShowVendorOrder] = useState(false);
     const [reviewFor, setReviewFor] = useState<StoreDocument | null>(null);
     const [reviewSupplier, setReviewSupplier] = useState('');
@@ -119,10 +130,12 @@ export default function StoreManager({ initialSection = 'overview', initialItems
     const [saving, setSaving] = useState(false);
     const [savingThresholdFor, setSavingThresholdFor] = useState<string | null>(null);
     const lowStock = useMemo(() => storeItems.filter((item) => item.reorderLevel > 0 && item.currentStock <= item.reorderLevel), [storeItems]);
+    const minimumNotSet = useMemo(() => storeItems.filter((item) => item.reorderLevel <= 0), [storeItems]);
     const visibleStoreItems = useMemo(() => [...storeItems]
         .filter((item) => `${item.name} ${item.category} ${item.supplier || ''}`.toLowerCase().includes(stockQuery.trim().toLowerCase()))
+        .filter((item) => stockFilter === 'all' || (item.reorderLevel > 0 && item.currentStock <= item.reorderLevel))
         .sort((a, b) => Number(b.reorderLevel > 0 && b.currentStock <= b.reorderLevel) - Number(a.reorderLevel > 0 && a.currentStock <= a.reorderLevel) || a.name.localeCompare(b.name)),
-    [storeItems, stockQuery]);
+    [storeItems, stockQuery, stockFilter]);
     const requisitions = useMemo(() => initialDocuments.filter((doc) => doc.type === 'requisition'), [initialDocuments]);
     const purchaseOrders = useMemo(() => initialDocuments.filter((doc) => doc.type === 'purchase_order'), [initialDocuments]);
     const supplierBills = useMemo(() => purchaseOrders.filter((doc) => doc.status === 'received' && (
@@ -141,6 +154,25 @@ export default function StoreManager({ initialSection = 'overview', initialItems
     const reviewOrders = useMemo(() => purchaseOrders.filter((doc) => doc.status === 'review_required'), [purchaseOrders]);
     const suggestedSpend = useMemo(() => reviewOrders.reduce((sum, po) => sum + po.lines.reduce((lineSum, line) => lineSum + line.orderedQuantity * line.unitCost, 0), 0), [reviewOrders]);
     const hasUnpricedSuggestions = useMemo(() => reviewOrders.some((po) => po.lines.some((line) => line.unitCost <= 0)), [reviewOrders]);
+    const menuTrackingReadyCount = initialMenuStatus.readyMenuItems;
+    const menuSetupNeeded = initialMenuStatus.trackingEnabled ? Math.max(0, initialMenuStatus.activeMenuItems - menuTrackingReadyCount) : 0;
+    const depletedMenuIngredients = useMemo(() => {
+        if (!initialMenuStatus.trackingEnabled) return [];
+        const seen = new Set<string>();
+        return initialMenuStatus.mappedIngredients.flatMap((mapping) => {
+            const key = `${mapping.departmentId}:${mapping.inventoryItemId}`;
+            const item = itemById.get(mapping.inventoryItemId);
+            const department = initialDepartments.find((entry) => entry._id === mapping.departmentId);
+            if (!item || !department || seen.has(key) || Number(kitchenStockByLocation.get(key) || 0) > 0) return [];
+            seen.add(key);
+            return [{ departmentId: department._id, departmentName: department.name, inventoryItemId: item._id, itemName: item.name, unit: item.unit, storeAvailableStock: item.currentStock }];
+        }).sort((a, b) => a.itemName.localeCompare(b.itemName));
+    }, [initialMenuStatus, initialDepartments, itemById, kitchenStockByLocation]);
+
+    function startRequisitionFor(departmentId: string, inventoryItemId: string) {
+        setRequisitionPrefill({ departmentId, inventoryItemId, nonce: Date.now() });
+        setTab('requisitions');
+    }
 
     function downloadStoreExport(type: 'inventory-balance' | 'purchase-orders') {
         if (type === 'inventory-balance' && !/^\d{4}-(0[1-9]|1[0-2])$/.test(exportMonth)) {
@@ -237,15 +269,17 @@ export default function StoreManager({ initialSection = 'overview', initialItems
     }
 
     const tabs = [
+        { id: 'overview' as const, label: 'Overview', icon: ChartBarIcon },
         { id: 'stock' as const, label: 'Live stock', icon: ArchiveBoxIcon },
-        { id: 'buying' as const, label: 'Requisitions & purchasing', icon: ClipboardDocumentListIcon },
+        { id: 'requisitions' as const, label: 'Kitchen requests', icon: ClipboardDocumentListIcon, badge: depletedMenuIngredients.length },
+        { id: 'purchasing' as const, label: 'Vendor purchasing', icon: TruckIcon, badge: reviewOrders.length },
         { id: 'expenses' as const, label: 'Expenses & sales', icon: BanknotesIcon },
-        { id: 'balances' as const, label: 'Opening balances', icon: ArchiveBoxIcon },
+        { id: 'balances' as const, label: 'Opening balances', icon: BuildingStorefrontIcon },
     ];
 
     return <div className="space-y-6">
-        <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-            <div><p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Inventory & cost control</p><h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900">Store</h1><p className="mt-1 max-w-2xl text-sm text-slate-500">Check live stock, move goods to the kitchen, record purchases, and track finances.</p></div>
+        <header className="flex flex-col justify-between gap-4 xl:flex-row xl:items-end">
+            <div><p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Inventory operations</p><h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-950">Store</h1><p className="mt-1 max-w-2xl text-sm text-slate-500">One workspace for stock, kitchen issues, vendor purchasing, and financial records.</p></div>
             <div className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white p-3 sm:flex-row sm:items-end">
                 <label className="text-[11px] font-semibold text-slate-600">Balance month<input aria-label="Month for inventory balance export" type="month" value={exportMonth} onChange={(event) => setExportMonth(event.target.value)} className="mt-1 min-h-10 w-full rounded-lg border border-slate-200 px-2 text-sm text-slate-800 sm:w-40" /></label>
                 <button type="button" onClick={() => downloadStoreExport('inventory-balance')} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-slate-900 px-3 text-xs font-bold text-white hover:bg-slate-800"><ArrowDownTrayIcon className="h-4 w-4" />Monthly balance</button>
@@ -253,9 +287,47 @@ export default function StoreManager({ initialSection = 'overview', initialItems
             </div>
         </header>
 
-        <nav className="flex gap-2 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-2" aria-label="Store management">
-            {tabs.map(({ id, label, icon: Icon }) => <button key={id} onClick={() => setTab(id)} className={`inline-flex min-h-10 shrink-0 items-center gap-2 rounded-xl px-3 text-xs font-bold sm:px-4 sm:text-sm ${tab === id ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}><Icon className="h-4 w-4" />{label}</button>)}
+        <nav className="flex gap-1 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-1.5 shadow-sm" aria-label="Store management">
+            {tabs.map(({ id, label, icon: Icon, badge }) => <button key={id} onClick={() => setTab(id)} aria-current={tab === id ? 'page' : undefined} className={`inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl px-3 text-xs font-bold transition-colors sm:px-4 sm:text-sm ${tab === id ? 'bg-slate-950 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'}`}><Icon className="h-4 w-4" />{label}{badge ? <span className={`rounded-full px-2 py-0.5 text-[10px] ${tab === id ? 'bg-white/15 text-white' : 'bg-amber-100 text-amber-800'}`}>{badge}</span> : null}</button>)}
         </nav>
+
+        {!initialMenuStatus.trackingEnabled && initialMenuStatus.activeMenuItems > 0 && <section className="flex flex-col gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex gap-3"><ExclamationTriangleIcon className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" /><div><h2 className="font-bold text-rose-950">Menu stock deduction is turned off</h2><p className="mt-1 text-sm text-rose-800">Orders will not reduce kitchen stock until inventory tracking is enabled in the restaurant settings.</p></div></div><a href="/dashboard/menu" className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-xl bg-rose-700 px-4 text-sm font-bold text-white hover:bg-rose-800">Review menu setup</a></section>}
+
+        {lowStock.length > 0 && <section className="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex gap-3"><ExclamationTriangleIcon className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" /><div><h2 className="font-bold text-amber-950">{lowStock.length} Store {lowStock.length === 1 ? 'item is' : 'items are'} at or below minimum stock</h2><p className="mt-1 text-sm text-amber-900">{reviewOrders.length ? `${reviewOrders.length} vendor suggestion${reviewOrders.length === 1 ? '' : 's'} ready for human review.` : 'Review the stock list and create a vendor order before the Store runs out.'} Orders are never sent automatically.</p></div></div><button type="button" onClick={() => setTab('purchasing')} className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-amber-300 bg-white px-4 text-sm font-bold text-amber-950 hover:bg-amber-100"><ShoppingCartIcon className="h-4 w-4" />{reviewOrders.length ? 'Review suggestions' : 'Open purchasing'}</button></section>}
+
+        {tab === 'overview' && <div className="space-y-5">
+            <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {[
+                    { label: 'Store stock value', value: money(storeInventoryValue), detail: `${storeItems.length} active inventory items`, icon: BuildingStorefrontIcon, tone: 'sky' },
+                    { label: 'Kitchen stock value', value: money(kitchenInventoryValue), detail: `Across ${initialDepartments.length} kitchen departments`, icon: ArchiveBoxIcon, tone: 'emerald' },
+                    { label: 'Below minimum', value: String(lowStock.length), detail: lowStock.length ? 'Needs a vendor order review' : 'Store levels are healthy', icon: ExclamationTriangleIcon, tone: lowStock.length ? 'amber' : 'slate' },
+                    { label: 'Orders to follow up', value: String(reviewOrders.length + openOrders), detail: `${reviewOrders.length} to review · ${openOrders} awaiting delivery`, icon: TruckIcon, tone: 'violet' },
+                    { label: 'Minimums not set', value: String(minimumNotSet.length), detail: 'Set levels to get low-stock alerts', icon: ExclamationTriangleIcon, tone: minimumNotSet.length ? 'amber' : 'slate' },
+                ].map(({ label, value, detail, icon: Icon, tone }) => <article key={label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-semibold text-slate-500">{label}</p><p className="mt-2 text-2xl font-bold tracking-tight text-slate-950">{value}</p><p className="mt-1 text-xs text-slate-500">{detail}</p></div><span className={`rounded-xl p-2 ${tone === 'amber' ? 'bg-amber-100 text-amber-800' : tone === 'emerald' ? 'bg-emerald-100 text-emerald-800' : tone === 'violet' ? 'bg-violet-100 text-violet-800' : tone === 'sky' ? 'bg-sky-100 text-sky-800' : 'bg-slate-100 text-slate-600'}`}><Icon className="h-5 w-5" /></span></div></article>)}
+            </section>
+
+            {minimumNotSet.length > 0 && <section className="flex flex-col gap-3 rounded-2xl border border-sky-200 bg-sky-50 p-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="font-bold text-sky-950">Set Store minimums</h2><p className="mt-1 text-sm text-sky-900">{minimumNotSet.length} stock {minimumNotSet.length === 1 ? 'item has' : 'items have'} no minimum level, so it cannot trigger a replenishment alert.</p></div><button type="button" onClick={() => setTab('stock')} className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-xl bg-sky-700 px-4 text-sm font-bold text-white hover:bg-sky-800">Set stock levels</button></section>}
+
+            <div className="grid gap-4 xl:grid-cols-2">
+                <section className="rounded-2xl border border-amber-200 bg-white shadow-sm">
+                    <div className="flex items-start justify-between gap-3 border-b border-amber-100 bg-amber-50/70 p-4"><div><h2 className="font-bold text-slate-950">Store replenishment</h2><p className="mt-1 text-xs text-slate-600">Items at or below the minimum balance</p></div><span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-900">{lowStock.length} items</span></div>
+                    {lowStock.length ? <div className="divide-y divide-slate-100">{lowStock.slice(0, 6).map((item) => <div key={item._id} className="flex items-center justify-between gap-3 px-4 py-3"><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{item.name}</p><p className="mt-0.5 text-xs text-slate-500">{item.supplier || 'Supplier not set'} · Minimum {quantity(item.reorderLevel)} {item.unit}</p></div><p className="shrink-0 text-sm font-bold text-amber-800">{quantity(item.currentStock)} {item.unit}</p></div>)}</div> : <p className="p-5 text-sm text-slate-500">No Store items are below their minimum balance.</p>}
+                    <div className="border-t border-slate-100 p-3"><button type="button" onClick={() => { setTab('stock'); setStockFilter('low'); }} className="text-sm font-bold text-sky-700 hover:text-sky-900">Review stock levels →</button>{lowStock.length > 6 && <span className="ml-2 text-xs text-slate-500">Showing 6 of {lowStock.length}</span>}</div>
+                </section>
+
+                <section className="rounded-2xl border border-rose-200 bg-white shadow-sm">
+                    <div className="flex items-start justify-between gap-3 border-b border-rose-100 bg-rose-50/70 p-4"><div><h2 className="font-bold text-slate-950">Kitchen items to restock</h2><p className="mt-1 text-xs text-slate-600">Menu-linked ingredients currently at zero in their kitchen department</p></div><span className="rounded-full bg-rose-100 px-2.5 py-1 text-xs font-bold text-rose-900">{depletedMenuIngredients.length} items</span></div>
+                    {depletedMenuIngredients.length ? <div className="divide-y divide-slate-100">{depletedMenuIngredients.slice(0, 6).map((row) => <div key={`${row.departmentId}:${row.inventoryItemId}`} className="flex items-center justify-between gap-3 px-4 py-3"><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{row.itemName}</p><p className="mt-0.5 text-xs text-slate-500">{row.departmentName} · Store has {quantity(row.storeAvailableStock)} {row.unit}</p></div><button type="button" onClick={() => row.storeAvailableStock > 0 ? startRequisitionFor(row.departmentId, row.inventoryItemId) : setTab('purchasing')} className={`min-h-9 shrink-0 rounded-lg px-3 text-xs font-bold ${row.storeAvailableStock > 0 ? 'bg-violet-700 text-white hover:bg-violet-800' : 'border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100'}`}>{row.storeAvailableStock > 0 ? 'Request stock' : 'Purchase stock'}</button></div>)}</div> : <p className="p-5 text-sm text-slate-500">No mapped menu ingredients are out of stock in the kitchen.</p>}
+                    {depletedMenuIngredients.length > 6 && <div className="border-t border-slate-100 p-3"><button type="button" onClick={() => setTab('requisitions')} className="text-sm font-bold text-violet-700">See all kitchen stock and requests →</button><span className="ml-2 text-xs text-slate-500">Showing 6 of {depletedMenuIngredients.length}</span></div>}
+                </section>
+            </div>
+
+            {menuSetupNeeded > 0 && <section className="flex flex-col gap-3 rounded-2xl border border-sky-200 bg-sky-50 p-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="font-bold text-sky-950">Finish menu stock mapping</h2><p className="mt-1 text-sm text-sky-900">{menuTrackingReadyCount} of {initialMenuStatus.activeMenuItems} available menu items have a complete recipe and kitchen department. Unmapped items will not deduct kitchen stock.</p></div><a href="/dashboard/menu" className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-xl bg-sky-700 px-4 text-sm font-bold text-white hover:bg-sky-800">Map ingredients</a></section>}
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-bold text-slate-950">Daily operations</h2><p className="mt-1 text-xs text-slate-500">Pick up where you need to work</p></div></div><div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><button type="button" onClick={() => setTab('requisitions')} className="flex min-h-20 items-center gap-3 rounded-xl border border-slate-200 p-3 text-left hover:border-violet-300 hover:bg-violet-50"><ClipboardDocumentListIcon className="h-5 w-5 shrink-0 text-violet-700" /><span><b className="block text-sm text-slate-900">Issue kitchen stock</b><small className="text-xs text-slate-500">Create or edit a department requisition</small></span></button><button type="button" onClick={() => setTab('purchasing')} className="flex min-h-20 items-center gap-3 rounded-xl border border-slate-200 p-3 text-left hover:border-sky-300 hover:bg-sky-50"><TruckIcon className="h-5 w-5 shrink-0 text-sky-700" /><span><b className="block text-sm text-slate-900">Buy from vendors</b><small className="text-xs text-slate-500">Create orders, receive goods, record bills</small></span></button><button type="button" onClick={() => setTab('stock')} className="flex min-h-20 items-center gap-3 rounded-xl border border-slate-200 p-3 text-left hover:border-emerald-300 hover:bg-emerald-50"><ArchiveBoxIcon className="h-5 w-5 shrink-0 text-emerald-700" /><span><b className="block text-sm text-slate-900">View live stock</b><small className="text-xs text-slate-500">Compare Store and kitchen balances</small></span></button><button type="button" onClick={() => setTab('expenses')} className="flex min-h-20 items-center gap-3 rounded-xl border border-slate-200 p-3 text-left hover:border-amber-300 hover:bg-amber-50"><BanknotesIcon className="h-5 w-5 shrink-0 text-amber-700" /><span><b className="block text-sm text-slate-900">Expenses & sales</b><small className="text-xs text-slate-500">Record financial entries</small></span></button></div></section>
+        </div>}
+
+        {lowStock.length > 0 && tab === 'stock' && <div className="-mt-1 flex justify-end"><button type="button" onClick={() => setTab('purchasing')} className="text-sm font-bold text-amber-800 hover:text-amber-950">Review {reviewOrders.length} vendor suggestion{reviewOrders.length === 1 ? '' : 's'} →</button></div>}
 
         {tab === 'stock' && <div className="space-y-5">
             <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
@@ -263,8 +335,9 @@ export default function StoreManager({ initialSection = 'overview', initialItems
                     <div><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-bold text-slate-900">Live stock by location</h2><span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700">Auto refresh · 15 sec</span></div><p className="mt-1 text-xs text-slate-500">See Store and kitchen quantities. Scroll within the list for more items; swipe sideways for all columns.</p></div>
                     <button type="button" onClick={() => void refreshStock()} disabled={refreshingStock} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"><ArrowPathIcon className={`h-4 w-4 ${refreshingStock ? 'animate-spin' : ''}`} />{refreshingStock ? 'Refreshing…' : 'Refresh stock'}</button>
                 </div>
-                <div className="border-b border-slate-100 bg-slate-50/70 p-4">
+                <div className="flex flex-col gap-3 border-b border-slate-100 bg-slate-50/70 p-4 sm:flex-row sm:items-center sm:justify-between">
                     <input aria-label="Search stock" value={stockQuery} onChange={(event) => setStockQuery(event.target.value)} placeholder="Search stock items" className={`${inputClass} max-w-md`} />
+                    <div className="flex shrink-0 gap-2"><button type="button" onClick={() => setStockFilter('all')} className={`min-h-10 rounded-lg px-3 text-xs font-bold ${stockFilter === 'all' ? 'bg-slate-900 text-white' : 'border border-slate-200 bg-white text-slate-600'}`}>All items ({storeItems.length})</button><button type="button" onClick={() => setStockFilter('low')} className={`min-h-10 rounded-lg px-3 text-xs font-bold ${stockFilter === 'low' ? 'bg-amber-600 text-white' : 'border border-slate-200 bg-white text-amber-800'}`}>At / below minimum ({lowStock.length})</button></div>
                 </div>
                 <div role="region" aria-label="Live stock by location" tabIndex={0} className="max-h-[28rem] overflow-auto overscroll-contain focus:outline-none focus:ring-2 focus:ring-inset focus:ring-emerald-300">
                     <table className="w-full min-w-[980px] text-left text-xs">
@@ -286,26 +359,28 @@ export default function StoreManager({ initialSection = 'overview', initialItems
             </section>
         </div>}
 
-        {tab === 'buying' && <div className="space-y-5">
-            <nav className="flex gap-2 rounded-2xl border border-slate-200 bg-white p-2" aria-label="Store stock workflow">
-                <button onClick={() => setBuyingView('kitchen')} className={`min-h-10 flex-1 rounded-xl px-3 text-sm font-bold ${buyingView === 'kitchen' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>Kitchen requisitions <span className="ml-1 opacity-75">({requisitions.length})</span></button>
-                <button onClick={() => setBuyingView('vendors')} className={`min-h-10 flex-1 rounded-xl px-3 text-sm font-bold ${buyingView === 'vendors' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>Vendor purchases <span className="ml-1 opacity-75">({openOrders})</span></button>
-            </nav>
-            {buyingView === 'vendors' && reviewOrders.length > 0 && <section className="rounded-2xl border border-amber-200 bg-white">
-                <div className="border-b border-amber-100 bg-amber-50 p-4 sm:p-5"><h2 className="font-bold text-amber-950">Low-stock suggestions to review ({reviewOrders.length})</h2><p className="mt-1 text-xs text-amber-800">Check the quantity, supplier and price. Approval saves an order record; send it to the supplier separately.</p></div>
-                <div className="divide-y divide-slate-100">{reviewOrders.map((po) => <article key={po._id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-bold text-slate-900">{po.lines.map((line) => line.itemName).join(', ')}</h3><span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold uppercase text-amber-800">Review required</span></div><div className="mt-2 space-y-1">{po.lines.map((line) => { const item = itemById.get(String(line.inventoryItemId)); return <p key={line.inventoryItemId} className="text-sm text-slate-600">Suggested {quantity(line.orderedQuantity)} {line.unit} · {line.unitCost > 0 ? `estimated ${money(line.orderedQuantity * line.unitCost)}` : 'price needed'}{item ? ` · Store has ${quantity(item.currentStock)} / minimum ${quantity(item.reorderLevel)} ${item.unit}` : ''}</p>; })}</div><p className="mt-1 text-xs text-slate-500">Supplier: {po.supplier || 'Choose during review'}{po.notes ? ` · ${po.notes}` : ''}</p></div><button onClick={() => openAutoOrderReview(po)} className="min-h-10 shrink-0 rounded-xl bg-amber-600 px-4 text-sm font-bold text-white hover:bg-amber-700">Review suggestion</button></article>)}</div>
-            </section>}
-            {buyingView === 'vendors' && <InventoryBillScanner items={storeItems.map(({ _id, name, category, unit, currentStock, costPerUnit }) => ({ _id, name, category, unit, currentStock, costPerUnit }))} suppliers={knownSuppliers} categories={categories} />}
-            {buyingView === 'vendors' && <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5"><div><h2 className="font-bold text-slate-900">Planning a future order?</h2><p className="mt-1 text-xs leading-5 text-slate-500">Save an order you agreed with a supplier. It does not add stock; record the actual supplier bill above when goods arrive.</p></div><button disabled={!storeItems.length} onClick={() => { setEditOrderFor(null); setShowVendorOrder(true); }} className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"><TruckIcon className="h-4 w-4" /> Create order</button></div>}
-            {buyingView === 'kitchen' && <>
+        {tab === 'requisitions' && <div className="space-y-5">
+            <div className="rounded-2xl border border-violet-100 bg-violet-50/70 p-4"><p className="text-xs font-bold uppercase tracking-[0.14em] text-violet-700">Kitchen supply</p><h2 className="mt-1 text-lg font-bold text-slate-950">Issue Store stock to a kitchen department</h2><p className="mt-1 max-w-3xl text-sm text-slate-600">Choose the department and quantities. Submitting a requisition moves stock immediately, records the issue, and updates both balances. Menu orders then consume the department’s kitchen stock.</p></div>
             <KitchenInventoryWorkflow
                 items={storeItems.map(({ _id, name, unit, currentStock }) => ({ _id, name, unit, storeAvailableStock: currentStock }))}
                 departments={initialDepartments}
                 stocks={kitchenStocks}
+                lowIngredients={depletedMenuIngredients}
+                prefill={requisitionPrefill}
+                onPrefillHandled={clearRequisitionPrefill}
+                onOpenPurchasing={() => setTab('purchasing')}
                 requests={requisitions.map((request) => ({ _id: request._id, reference: request.reference, status: request.status, departmentId: request.departmentId, documentDate: request.documentDate, createdAt: request.createdAt, notes: request.notes, lines: request.lines.map((line) => ({ inventoryItemId: line.inventoryItemId, itemName: line.itemName, unit: line.unit, requestedQuantity: line.requestedQuantity, orderedQuantity: line.orderedQuantity, approvedQuantity: line.approvedQuantity })) }))}
             />
-            </>}
-            {buyingView === 'vendors' && <>
+        </div>}
+
+        {tab === 'purchasing' && <div className="space-y-5">
+            <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:p-5"><div><p className="text-xs font-bold uppercase tracking-[0.14em] text-sky-700">Vendor supply</p><h2 className="mt-1 text-lg font-bold text-slate-950">Replenish Store stock</h2><p className="mt-1 max-w-3xl text-sm text-slate-600">Review suggested orders, record agreed vendor orders, then enter or scan the supplier bill when goods arrive. Only received goods change Store stock.</p></div><button disabled={!storeItems.length} onClick={() => { setEditOrderFor(null); setShowVendorOrder(true); }} className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45"><TruckIcon className="h-4 w-4" /> Create vendor order</button></div>
+            {reviewOrders.length > 0 && <section className="rounded-2xl border border-amber-200 bg-white shadow-sm">
+                <div className="border-b border-amber-100 bg-amber-50 p-4 sm:p-5"><h2 className="font-bold text-amber-950">Low-stock suggestions to review ({reviewOrders.length})</h2><p className="mt-1 text-xs text-amber-800">Check the quantity, supplier and price. Approval saves an order record; send it to the supplier separately.</p></div>
+                <div className="divide-y divide-slate-100">{reviewOrders.map((po) => <article key={po._id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-bold text-slate-900">{po.lines.map((line) => line.itemName).join(', ')}</h3><span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold uppercase text-amber-800">Review required</span></div><div className="mt-2 space-y-1">{po.lines.map((line) => { const item = itemById.get(String(line.inventoryItemId)); return <p key={line.inventoryItemId} className="text-sm text-slate-600">Suggested {quantity(line.orderedQuantity)} {line.unit} · {line.unitCost > 0 ? `estimated ${money(line.orderedQuantity * line.unitCost)}` : 'price needed'}{item ? ` · Store has ${quantity(item.currentStock)} / minimum ${quantity(item.reorderLevel)} ${item.unit}` : ''}</p>; })}</div><p className="mt-1 text-xs text-slate-500">Supplier: {po.supplier || 'Choose during review'}{po.notes ? ` · ${po.notes}` : ''}</p></div><button onClick={() => openAutoOrderReview(po)} className="min-h-10 shrink-0 rounded-xl bg-amber-600 px-4 text-sm font-bold text-white hover:bg-amber-700">Review suggestion</button></article>)}</div>
+            </section>}
+            <InventoryBillScanner items={storeItems.map(({ _id, name, category, unit, currentStock, costPerUnit }) => ({ _id, name, category, unit, currentStock, costPerUnit }))} suppliers={knownSuppliers} categories={categories} />
+            <>
             <section className="overflow-hidden rounded-2xl border border-sky-100 bg-white">
                 <div className="border-b border-sky-100 bg-sky-50/60 p-4 sm:p-5"><div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-bold text-slate-900">Supplier bill history</h2><p className="mt-1 text-xs text-slate-600">These are the actual bills entered into the system. Edit a bill to correct its supplier, invoice, date, item lines, categories, quantities, units, or costs.</p></div><span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-600">{supplierBills.length} bills</span></div></div>
                 {!supplierBills.length ? <p className="p-8 text-center text-sm text-slate-500">No supplier bills yet. Enter or scan a bill above; received stock will appear in Store.</p> : <div className="divide-y divide-slate-100">{supplierBills.map((bill) => {
@@ -330,7 +405,7 @@ export default function StoreManager({ initialSection = 'overview', initialItems
                     </article>;
                 })}</div>}
             </section>
-            </>}
+            </>
         </div>}
 
 
