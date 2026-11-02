@@ -109,6 +109,9 @@ export default function StoreManager({ initialSection = 'overview', initialItems
     const [requisitionPrefill, setRequisitionPrefill] = useState<{ departmentId: string; inventoryItemId: string; nonce: number } | null>(null);
     const clearRequisitionPrefill = useCallback(() => setRequisitionPrefill(null), []);
     const [showVendorOrder, setShowVendorOrder] = useState(false);
+    const [showAdditionalPurchasingTools, setShowAdditionalPurchasingTools] = useState(false);
+    const [billSearch, setBillSearch] = useState('');
+    const [expandedBillId, setExpandedBillId] = useState<string | null>(null);
     const [reviewFor, setReviewFor] = useState<StoreDocument | null>(null);
     const [reviewSupplier, setReviewSupplier] = useState('');
     const [reviewDate, setReviewDate] = useState(initialEntryDate);
@@ -145,6 +148,13 @@ export default function StoreManager({ initialSection = 'overview', initialItems
         const billIds = new Set(supplierBills.map((bill) => bill._id));
         return purchaseOrders.filter((doc) => !billIds.has(doc._id));
     }, [purchaseOrders, supplierBills]);
+    const visibleSupplierBills = useMemo(() => {
+        const query = billSearch.trim().toLowerCase();
+        return [...supplierBills]
+            .filter((bill) => !query || [bill.supplier, bill.reference, bill.vendorBillNumber, bill.notes, ...bill.lines.map((line) => line.itemName)]
+                .some((value) => String(value || '').toLowerCase().includes(query)))
+            .sort((a, b) => new Date(b.invoiceDate || b.documentDate || b.createdAt).getTime() - new Date(a.invoiceDate || a.documentDate || a.createdAt).getTime());
+    }, [supplierBills, billSearch]);
     const knownSuppliers = useMemo(() => [...new Set([
         ...purchaseOrders.map((doc) => doc.supplier.trim()),
         ...storeItems.map((item) => item.supplier?.trim() || ''),
@@ -272,7 +282,7 @@ export default function StoreManager({ initialSection = 'overview', initialItems
         { id: 'overview' as const, label: 'Overview', icon: ChartBarIcon },
         { id: 'stock' as const, label: 'Live stock', icon: ArchiveBoxIcon },
         { id: 'requisitions' as const, label: 'Kitchen requests', icon: ClipboardDocumentListIcon, badge: depletedMenuIngredients.length },
-        { id: 'purchasing' as const, label: 'Vendor purchasing', icon: TruckIcon, badge: reviewOrders.length },
+        { id: 'purchasing' as const, label: 'Bill entry', icon: TruckIcon, badge: lowStock.length },
         { id: 'expenses' as const, label: 'Expenses & sales', icon: BanknotesIcon },
         { id: 'balances' as const, label: 'Opening balances', icon: BuildingStorefrontIcon },
     ];
@@ -293,7 +303,7 @@ export default function StoreManager({ initialSection = 'overview', initialItems
 
         {!initialMenuStatus.trackingEnabled && initialMenuStatus.activeMenuItems > 0 && <section className="flex flex-col gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex gap-3"><ExclamationTriangleIcon className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" /><div><h2 className="font-bold text-rose-950">Menu stock deduction is turned off</h2><p className="mt-1 text-sm text-rose-800">Orders will not reduce kitchen stock until inventory tracking is enabled in the restaurant settings.</p></div></div><a href="/dashboard/menu" className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-xl bg-rose-700 px-4 text-sm font-bold text-white hover:bg-rose-800">Review menu setup</a></section>}
 
-        {lowStock.length > 0 && <section className="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex gap-3"><ExclamationTriangleIcon className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" /><div><h2 className="font-bold text-amber-950">{lowStock.length} Store {lowStock.length === 1 ? 'item is' : 'items are'} at or below minimum stock</h2><p className="mt-1 text-sm text-amber-900">{reviewOrders.length ? `${reviewOrders.length} vendor suggestion${reviewOrders.length === 1 ? '' : 's'} ready for human review.` : 'Review the stock list and create a vendor order before the Store runs out.'} Orders are never sent automatically.</p></div></div><button type="button" onClick={() => setTab('purchasing')} className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-amber-300 bg-white px-4 text-sm font-bold text-amber-950 hover:bg-amber-100"><ShoppingCartIcon className="h-4 w-4" />{reviewOrders.length ? 'Review suggestions' : 'Open purchasing'}</button></section>}
+        {lowStock.length > 0 && <section className="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex gap-3"><ExclamationTriangleIcon className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" /><div><h2 className="font-bold text-amber-950">{lowStock.length} Store {lowStock.length === 1 ? 'item is' : 'items are'} at or below minimum stock</h2><p className="mt-1 text-sm text-amber-900">{reviewOrders.length ? `${reviewOrders.length} vendor suggestion${reviewOrders.length === 1 ? '' : 's'} ready for human review.` : 'Record the supplier bill when you receive the replenishment. Goods are added to Store stock after you save it.'} Orders are never sent automatically.</p></div></div><button type="button" onClick={() => { setTab('purchasing'); setShowAdditionalPurchasingTools(reviewOrders.length > 0); }} className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-amber-300 bg-white px-4 text-sm font-bold text-amber-950 hover:bg-amber-100"><ShoppingCartIcon className="h-4 w-4" />{reviewOrders.length ? 'Review suggestions' : 'Record a bill'}</button></section>}
 
         {tab === 'overview' && <div className="space-y-5">
             <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -374,25 +384,80 @@ export default function StoreManager({ initialSection = 'overview', initialItems
         </div>}
 
         {tab === 'purchasing' && <div className="space-y-5">
-            <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:p-5"><div><p className="text-xs font-bold uppercase tracking-[0.14em] text-sky-700">Vendor supply</p><h2 className="mt-1 text-lg font-bold text-slate-950">Replenish Store stock</h2><p className="mt-1 max-w-3xl text-sm text-slate-600">Review suggested orders, record agreed vendor orders, then enter or scan the supplier bill when goods arrive. Only received goods change Store stock.</p></div><button disabled={!storeItems.length} onClick={() => { setEditOrderFor(null); setShowVendorOrder(true); }} className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45"><TruckIcon className="h-4 w-4" /> Create vendor order</button></div>
-            {reviewOrders.length > 0 && <section className="rounded-2xl border border-amber-200 bg-white shadow-sm">
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="max-w-2xl">
+                        <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-700">Supplier purchasing</p>
+                        <h2 className="mt-1 text-xl font-bold tracking-tight text-slate-950">Bill entry</h2>
+                        <p className="mt-1 text-sm leading-6 text-slate-600">Enter or scan the supplier bill for goods received. Review the items, then save once to record the bill and add the received quantities to Store stock.</p>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-center text-[11px] font-semibold text-slate-600 lg:min-w-[26rem]">
+                        <div className="rounded-xl bg-slate-50 px-2 py-3"><span className="mx-auto mb-1 flex h-6 w-6 items-center justify-center rounded-full bg-sky-100 text-xs font-bold text-sky-800">1</span>Enter bill</div>
+                        <div className="rounded-xl bg-slate-50 px-2 py-3"><span className="mx-auto mb-1 flex h-6 w-6 items-center justify-center rounded-full bg-sky-100 text-xs font-bold text-sky-800">2</span>Review items</div>
+                        <div className="rounded-xl bg-slate-50 px-2 py-3"><span className="mx-auto mb-1 flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-800">3</span>Add to Store</div>
+                    </div>
+                </div>
+            </section>
+
+            <InventoryBillScanner items={storeItems.map(({ _id, name, category, unit, currentStock, costPerUnit }) => ({ _id, name, category, unit, currentStock, costPerUnit }))} suppliers={knownSuppliers} categories={categories} />
+
+            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                    <div>
+                        <div className="flex flex-wrap items-center gap-2"><h2 className="font-bold text-slate-950">Supplier bill history</h2><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">{supplierBills.length}</span></div>
+                        <p className="mt-1 text-xs text-slate-500">Open a bill to review its item lines or payment details. Use Edit bill to correct items, amounts, or invoice date.</p>
+                    </div>
+                    {supplierBills.length > 0 && <label className="block w-full sm:max-w-xs"><span className="sr-only">Search supplier bills</span><input value={billSearch} onChange={(event) => setBillSearch(event.target.value)} placeholder="Search supplier, bill number, or item" className="min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100" /></label>}
+                </div>
+                {!supplierBills.length
+                    ? <div className="px-5 py-10 text-center"><p className="font-semibold text-slate-800">No supplier bills yet</p><p className="mt-1 text-sm text-slate-500">Choose Add bill above to enter or scan your first invoice.</p></div>
+                    : !visibleSupplierBills.length
+                        ? <p className="p-8 text-center text-sm text-slate-500">No bills match “{billSearch}”. Try another supplier, bill number, or item.</p>
+                        : <div className="divide-y divide-slate-100">{visibleSupplierBills.map((bill) => {
+                            const billTotal = bill.lines.reduce((sum, line) => sum + Number(line.receivedQuantity || 0) * Number(line.unitCost || 0), 0);
+                            const paidValue = bill.payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+                            const due = Math.max(0, billTotal - paidValue);
+                            const isExpanded = expandedBillId === bill._id;
+                            const paymentStatus = due <= 0 ? 'Paid' : paidValue > 0 ? 'Part paid' : 'Payment due';
+                            return <article key={bill._id} className="p-4 sm:px-5">
+                                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto] lg:items-center">
+                                    <div className="min-w-0">
+                                        <div className="flex flex-wrap items-center gap-2"><h3 className="truncate font-bold text-slate-900">{bill.supplier}</h3><span className={due <= 0 ? 'rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700' : 'rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-amber-800'}>{paymentStatus}</span></div>
+                                        <p className="mt-1 text-xs text-slate-500">Invoice {bill.vendorBillNumber || '—'} <span className="mx-1 text-slate-300">·</span> {dateLabel(bill.invoiceDate || bill.documentDate || bill.createdAt)} <span className="mx-1 text-slate-300">·</span> {bill.lines.length} {bill.lines.length === 1 ? 'item' : 'items'} <span className="mx-1 text-slate-300">·</span> {bill.reference}</p>
+                                    </div>
+                                    <div className="flex items-center gap-5 lg:justify-end">
+                                        <div><p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Bill total</p><p className="mt-0.5 text-sm font-bold text-slate-900">{money(billTotal)}</p></div>
+                                        <div><p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Due</p><p className="mt-0.5 text-sm font-bold text-slate-700">{money(due)}</p></div>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2 lg:justify-end">
+                                        <button type="button" onClick={() => setEditBillFor(bill)} className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-700 hover:border-sky-200 hover:bg-sky-50 hover:text-sky-800"><PencilSquareIcon className="h-4 w-4" /> Edit bill</button>
+                                        <button type="button" aria-expanded={isExpanded} onClick={() => setExpandedBillId(isExpanded ? null : bill._id)} className="min-h-9 rounded-lg bg-slate-100 px-3 text-xs font-bold text-slate-700 hover:bg-slate-200">{isExpanded ? 'Hide details' : 'View details'}</button>
+                                    </div>
+                                </div>
+                                {isExpanded && <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-3 sm:p-4">
+                                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{bill.lines.map((line, index) => <div key={bill._id + ':' + line.inventoryItemId + ':' + index} className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2.5"><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-800">{line.itemName}</p><p className="mt-0.5 text-xs text-slate-500">{line.category || 'Other'} · {quantity(line.receivedQuantity)} {line.unit} × {money(line.unitCost)}</p></div><p className="shrink-0 text-xs font-bold text-slate-700">{money(Number(line.receivedQuantity || 0) * Number(line.unitCost || 0))}</p></div>)}</div>
+                                    {bill.notes && <p className="mt-3 text-xs text-slate-500">{bill.notes}</p>}
+                                    {due > 0 && billTotal > 0 && <form onSubmit={(event) => submitPayment(event, bill)} className="mt-4 grid gap-2 border-t border-slate-200 pt-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end"><label className="text-xs font-semibold text-slate-600">Record payment<input required type="number" min="0.01" max={due} step="0.01" value={paymentAmounts[bill._id] || ''} onChange={(event) => setPaymentAmounts({ ...paymentAmounts, [bill._id]: event.target.value })} placeholder={'Balance ' + money(due)} className={'mt-1 ' + inputClass} /></label><label className="text-xs font-semibold text-slate-600">Payment reference<input value={paymentRefs[bill._id] || ''} onChange={(event) => setPaymentRefs({ ...paymentRefs, [bill._id]: event.target.value })} placeholder="Optional" className={'mt-1 ' + inputClass} /></label><button disabled={saving} className="min-h-10 rounded-xl bg-slate-900 px-4 text-xs font-bold text-white disabled:opacity-50">Record payment</button></form>}
+                                </div>}
+                            </article>;
+                        })}</div>}
+            </section>
+
+            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                    <div><h2 className="font-bold text-slate-900">Additional purchasing tools</h2><p className="mt-1 text-xs leading-5 text-slate-500">Optional order planning for teams that track vendor orders before delivery. Bill entry above remains the fastest way to add received goods to Store.</p></div>
+                    <div className="flex items-center gap-2">
+                        <span className="hidden rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600 sm:inline-flex">{reviewOrders.length} suggestions · {openOrders} open</span>
+                        <button type="button" aria-expanded={showAdditionalPurchasingTools} onClick={() => setShowAdditionalPurchasingTools((current) => !current)} className="min-h-10 shrink-0 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-700 hover:bg-slate-50">{showAdditionalPurchasingTools ? 'Hide tools' : 'Show tools'}</button>
+                    </div>
+                </div>
+                {showAdditionalPurchasingTools && <div className="space-y-4 border-t border-slate-100 bg-slate-50/50 p-3 sm:p-4">
+                    <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="text-sm font-bold text-slate-900">Planned vendor orders</h3><p className="mt-1 text-xs text-slate-500">Orders here do not change stock until goods are received. Use bill entry when you want to post the actual invoice directly.</p></div><button disabled={!storeItems.length} onClick={() => { setEditOrderFor(null); setShowVendorOrder(true); }} className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 text-xs font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45"><TruckIcon className="h-4 w-4" /> Create planned order</button></div>
+                    {reviewOrders.length > 0 && <section className="rounded-2xl border border-amber-200 bg-white shadow-sm">
                 <div className="border-b border-amber-100 bg-amber-50 p-4 sm:p-5"><h2 className="font-bold text-amber-950">Low-stock suggestions to review ({reviewOrders.length})</h2><p className="mt-1 text-xs text-amber-800">Check the quantity, supplier and price. Approval saves an order record; send it to the supplier separately.</p></div>
                 <div className="divide-y divide-slate-100">{reviewOrders.map((po) => <article key={po._id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-bold text-slate-900">{po.lines.map((line) => line.itemName).join(', ')}</h3><span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold uppercase text-amber-800">Review required</span></div><div className="mt-2 space-y-1">{po.lines.map((line) => { const item = itemById.get(String(line.inventoryItemId)); return <p key={line.inventoryItemId} className="text-sm text-slate-600">Suggested {quantity(line.orderedQuantity)} {line.unit} · {line.unitCost > 0 ? `estimated ${money(line.orderedQuantity * line.unitCost)}` : 'price needed'}{item ? ` · Store has ${quantity(item.currentStock)} / minimum ${quantity(item.reorderLevel)} ${item.unit}` : ''}</p>; })}</div><p className="mt-1 text-xs text-slate-500">Supplier: {po.supplier || 'Choose during review'}{po.notes ? ` · ${po.notes}` : ''}</p></div><button onClick={() => openAutoOrderReview(po)} className="min-h-10 shrink-0 rounded-xl bg-amber-600 px-4 text-sm font-bold text-white hover:bg-amber-700">Review suggestion</button></article>)}</div>
             </section>}
-            <InventoryBillScanner items={storeItems.map(({ _id, name, category, unit, currentStock, costPerUnit }) => ({ _id, name, category, unit, currentStock, costPerUnit }))} suppliers={knownSuppliers} categories={categories} />
-            <>
-            <section className="overflow-hidden rounded-2xl border border-sky-100 bg-white">
-                <div className="border-b border-sky-100 bg-sky-50/60 p-4 sm:p-5"><div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-bold text-slate-900">Supplier bill history</h2><p className="mt-1 text-xs text-slate-600">These are the actual bills entered into the system. Edit a bill to correct its supplier, invoice, date, item lines, categories, quantities, units, or costs.</p></div><span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-600">{supplierBills.length} bills</span></div></div>
-                {!supplierBills.length ? <p className="p-8 text-center text-sm text-slate-500">No supplier bills yet. Enter or scan a bill above; received stock will appear in Store.</p> : <div className="divide-y divide-slate-100">{supplierBills.map((bill) => {
-                    const billTotal = bill.lines.reduce((sum, line) => sum + Number(line.receivedQuantity || 0) * Number(line.unitCost || 0), 0);
-                    const paidValue = bill.payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-                    const due = Math.max(0, billTotal - paidValue);
-                    return <article key={bill._id} className="p-4 sm:p-5"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-bold text-slate-900">{bill.supplier}</h3><span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-bold uppercase text-emerald-700">Bill · received</span>{bill.vendorBillNumber && <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-600">Invoice {bill.vendorBillNumber}</span>}</div><p className="mt-1 text-xs text-slate-500">{bill.reference} · Invoice date {dateLabel(bill.invoiceDate || bill.documentDate || bill.createdAt)}</p><ul className="mt-3 grid gap-2 sm:grid-cols-2">{bill.lines.map((line, index) => <li key={`${line.inventoryItemId}-${index}`} className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-700"><span className="font-semibold">{line.itemName}</span><span className="text-slate-500"> · {line.category || 'Other'} · {quantity(line.receivedQuantity)} {line.unit} × {money(line.unitCost)}</span><span className="mt-1 block font-semibold">{money(Number(line.receivedQuantity || 0) * Number(line.unitCost || 0))}</span></li>)}</ul><p className="mt-3 text-xs font-semibold text-slate-600">Bill total {money(billTotal)} · Paid {money(paidValue)} · Due {money(due)}</p>{bill.notes && <p className="mt-1 text-xs text-slate-500">{bill.notes}</p>}</div><button type="button" onClick={() => setEditBillFor(bill)} className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-sky-200 bg-white px-4 text-sm font-bold text-sky-800 hover:bg-sky-50"><PencilSquareIcon className="h-4 w-4" /> Edit bill</button></div>
-                        {due > 0 && billTotal > 0 && <form onSubmit={(event) => submitPayment(event, bill)} className="mt-4 grid gap-2 rounded-xl border border-slate-100 bg-slate-50 p-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end"><label className="text-xs font-semibold text-slate-600">Payment amount<input required type="number" min="0.01" max={due} step="0.01" value={paymentAmounts[bill._id] || ''} onChange={(event) => setPaymentAmounts({ ...paymentAmounts, [bill._id]: event.target.value })} placeholder={`Balance ${money(due)}`} className={`mt-1 ${inputClass}`} /></label><label className="text-xs font-semibold text-slate-600">Payment reference<input value={paymentRefs[bill._id] || ''} onChange={(event) => setPaymentRefs({ ...paymentRefs, [bill._id]: event.target.value })} placeholder="Optional" className={`mt-1 ${inputClass}`} /></label><button disabled={saving} className="min-h-11 rounded-xl bg-slate-900 px-4 text-sm font-bold text-white disabled:opacity-50">Record payment</button></form>}
-                    </article>;
-                })}</div>}
-            </section>
-            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
                 <div className="border-b border-slate-100 p-4 sm:p-5"><div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-bold text-slate-900">Vendor orders</h2><p className="mt-1 text-xs text-slate-500">Planned supplier orders stay separate from actual bills. Receive goods here only when an order was entered in advance.</p></div><span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{vendorOrders.filter((po) => po.status !== 'review_required').length} orders</span></div></div>
                 {!vendorOrders.some((po) => po.status !== 'review_required') ? <p className="p-8 text-center text-sm text-slate-500">No planned vendor orders. You can enter the actual bill directly when goods arrive.</p> : <div className="divide-y divide-slate-100">{vendorOrders.filter((po) => po.status !== 'review_required').map((po) => {
                     const receivedValue = po.lines.reduce((sum, line) => sum + line.receivedQuantity * line.unitCost, 0);
@@ -405,7 +470,8 @@ export default function StoreManager({ initialSection = 'overview', initialItems
                     </article>;
                 })}</div>}
             </section>
-            </>
+                </div>}
+            </section>
         </div>}
 
 
