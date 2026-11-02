@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'react-hot-toast';
-import { ArchiveBoxIcon, ArrowPathIcon, BanknotesIcon, ClipboardDocumentListIcon, PencilSquareIcon, TruckIcon } from '@heroicons/react/24/outline';
+import { ArchiveBoxIcon, ArrowDownTrayIcon, ArrowPathIcon, BanknotesIcon, ClipboardDocumentListIcon, PencilSquareIcon, TruckIcon } from '@heroicons/react/24/outline';
 import { InventoryBillScanner } from '@/components/dashboard/InventoryBillScanner';
 import EditSupplierBillDialog from '@/components/dashboard/EditSupplierBillDialog';
 import VendorPurchaseOrderDialog from '@/components/dashboard/VendorPurchaseOrderDialog';
@@ -43,6 +43,7 @@ export default function StoreManager({ initialSection = 'overview', initialItems
     const [refreshingStock, setRefreshingStock] = useState(false);
     const refreshInProgress = useRef(false);
     const [stockQuery, setStockQuery] = useState('');
+    const [exportMonth, setExportMonth] = useState(() => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 7));
     const refreshStock = useCallback(async () => {
         if (document.visibilityState !== 'visible' || refreshInProgress.current) return;
         refreshInProgress.current = true;
@@ -141,6 +142,16 @@ export default function StoreManager({ initialSection = 'overview', initialItems
     const suggestedSpend = useMemo(() => reviewOrders.reduce((sum, po) => sum + po.lines.reduce((lineSum, line) => lineSum + line.orderedQuantity * line.unitCost, 0), 0), [reviewOrders]);
     const hasUnpricedSuggestions = useMemo(() => reviewOrders.some((po) => po.lines.some((line) => line.unitCost <= 0)), [reviewOrders]);
 
+    function downloadStoreExport(type: 'inventory-balance' | 'purchase-orders') {
+        if (type === 'inventory-balance' && !/^\d{4}-(0[1-9]|1[0-2])$/.test(exportMonth)) {
+            toast.error('Choose a month for the inventory balance export');
+            return;
+        }
+        const query = new URLSearchParams({ type });
+        if (type === 'inventory-balance') query.set('month', exportMonth);
+        window.location.assign(`/api/store/export?${query.toString()}`);
+    }
+
     function kitchenOnHand(departmentId: string, inventoryItemId: string) {
         return kitchenStockByLocation.get(`${departmentId}:${inventoryItemId}`) || 0;
     }
@@ -235,6 +246,11 @@ export default function StoreManager({ initialSection = 'overview', initialItems
     return <div className="space-y-6">
         <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
             <div><p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Inventory & cost control</p><h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900">Store</h1><p className="mt-1 max-w-2xl text-sm text-slate-500">Check live stock, move goods to the kitchen, record purchases, and track finances.</p></div>
+            <div className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white p-3 sm:flex-row sm:items-end">
+                <label className="text-[11px] font-semibold text-slate-600">Balance month<input aria-label="Month for inventory balance export" type="month" value={exportMonth} onChange={(event) => setExportMonth(event.target.value)} className="mt-1 min-h-10 w-full rounded-lg border border-slate-200 px-2 text-sm text-slate-800 sm:w-40" /></label>
+                <button type="button" onClick={() => downloadStoreExport('inventory-balance')} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-slate-900 px-3 text-xs font-bold text-white hover:bg-slate-800"><ArrowDownTrayIcon className="h-4 w-4" />Monthly balance</button>
+                <button type="button" onClick={() => downloadStoreExport('purchase-orders')} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-700 hover:bg-slate-50"><ArrowDownTrayIcon className="h-4 w-4" />All purchase orders</button>
+            </div>
         </header>
 
         <nav className="flex gap-2 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-2" aria-label="Store management">
